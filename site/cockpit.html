@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<!--
+  UNIMATRIX cockpit shell (site/cockpit.html)
+
+  Project: unimatrix - multi-model swarm orchestrator driven from Claude Code
+  Module:  site/cockpit.html - thin shell for the redesigned cockpit; chrome + empty view containers
+  Deps:    site/cockpit/{base,ops,grid,flight,firehose,speed,drawer}.css; ES modules under /cockpit/
+           served same-origin by site/server.mjs (Node stdlib only, 127.0.0.1:4747)
+  Tested:  tests/ground-control.bats (serving); playwright Lane-A QA (plan §5.5 18-step checklist)
+
+  Key responsibilities:
+  - Be a thin shell ONLY: head, header chrome, status-strip slot skeleton, 5 empty view containers,
+    the two overlay drawers, #toast, the local-only #notice, and the ADD-SPEC <dialog>. All logic is
+    in /cockpit/main.js (+ the data/ctl/format + view modules it loads).
+  - Carry the exact shell DOM ids the wave-3 contract pins: header #hdr-tabs (4 data-view buttons)
+    #hdr-run #hdr-hint #hdr-dot #hdr-beep #hdr-pause #hdr-add #hdr-abort #hdr-gear; strip
+    #st-counts #st-chips #st-gate #st-budget #st-burn; views #view-ops #view-grid #view-flight
+    #view-fire #view-speed; overlays #agent-drawer #settings-drawer #toast #notice.
+
+  Design constraints:
+  - No inline scripts and no inline styles beyond the single <script type="module"> at the end.
+  - No framework, no build step, no external runtime dep (font self-hosted via base.css @font-face).
+  - View modules are loaded dynamically by main.js (they may not exist yet during the build) — the
+    shell must render and stay usable even before a given view lands.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>UNIMATRIX · COCKPIT</title>
+<link rel="icon" id="fav" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%2334d399'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/cockpit/base.css">
+<link rel="stylesheet" href="/cockpit/ops.css">
+<link rel="stylesheet" href="/cockpit/grid.css">
+<link rel="stylesheet" href="/cockpit/flight.css">
+<link rel="stylesheet" href="/cockpit/firehose.css">
+<link rel="stylesheet" href="/cockpit/speed.css">
+<link rel="stylesheet" href="/cockpit/drawer.css">
+</head>
+<body>
+<div class="shell">
+  <header id="hdr">
+    <div class="hdr-brand">
+      <span class="brand-name">UNIMATRIX</span>
+      <span class="brand-badge">▚ Cockpit</span>
+    </div>
+    <nav id="hdr-tabs" aria-label="Views">
+      <button type="button" class="tab active" data-view="ops">OPS WALL</button>
+      <button type="button" class="tab" data-view="grid">MISSION CONTROL</button>
+      <button type="button" class="tab" data-view="flight">FLIGHTPATHS</button>
+      <button type="button" class="tab" data-view="speed">SPEEDWARS</button>
+    </nav>
+    <div class="hdr-right">
+      <span id="hdr-run">run —</span>
+      <span id="hdr-hint">1–5 views · esc closes</span>
+      <span id="hdr-dot" class="dot reconnect" title="stream health"></span>
+      <button type="button" id="hdr-beep" class="btn-ctl" title="toggle alert beep (off by default)">♪ OFF</button>
+      <button type="button" id="hdr-pause" class="btn-ctl">‖ PAUSE ALL</button>
+      <button type="button" id="hdr-add" class="btn-ctl">+ ADD SPEC</button>
+      <button type="button" id="hdr-abort" class="btn-ctl abort">ABORT</button>
+      <button type="button" id="hdr-gear" class="btn-ctl" title="agent lane settings">⚙</button>
+    </div>
+  </header>
+
+  <div id="strip">
+    <span id="st-counts"></span>
+    <span id="st-chips"></span>
+    <span id="st-gate"></span>
+    <span id="st-budget"></span>
+    <span id="st-burn"></span>
+  </div>
+
+  <main class="views">
+    <section id="view-ops" class="view"></section>
+    <section id="view-grid" class="view" hidden></section>
+    <section id="view-flight" class="view" hidden></section>
+    <section id="view-fire" class="view" hidden></section>
+    <section id="view-speed" class="view" hidden></section>
+  </main>
+</div>
+
+<aside id="agent-drawer" class="drawer" hidden aria-label="Agent detail"></aside>
+<aside id="settings-drawer" class="drawer" hidden aria-label="Agent lane settings"></aside>
+
+<div id="toast" class="toast" hidden></div>
+
+<div id="notice" class="notice" hidden>
+  <h2>Local-only</h2>
+  <p>Live cockpit is local-only. Start it with Ground Control (<code>gc</code>) or just run a swarm — it opens itself.</p>
+  <a class="btn-ctl primary" href="guide.html">Read the guide</a>
+</div>
+
+<dialog id="add-dialog" class="add-dialog" aria-label="Add spec">
+  <form id="add-form">
+    <div class="dlg-title">+ add spec</div>
+    <div class="dlg-row">
+      <label for="add-id">spec id</label>
+      <input id="add-id" type="text" autocomplete="off" spellcheck="false"
+             pattern="^[A-Za-z0-9][A-Za-z0-9._-]*$" placeholder="e.g. s5-api" required>
+    </div>
+    <div class="dlg-row dlg-grow">
+      <label for="add-prompt">prompt</label>
+      <textarea id="add-prompt" placeholder="what should this agent investigate / build?" required></textarea>
+    </div>
+    <div class="dlg-row">
+      <label for="add-lane">lane (optional)</label>
+      <select id="add-lane">
+        <option value="default">default (EXEC_CHAIN)</option>
+      </select>
+    </div>
+    <div class="dlg-row">
+      <label for="add-write">write dir (optional)</label>
+      <input id="add-write" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. src/api">
+    </div>
+    <div class="dlg-actions">
+      <button type="button" id="add-cancel" class="btn-ctl">CANCEL</button>
+      <button type="submit" id="add-submit" class="btn-ctl primary">ADD</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="/cockpit/main.js"></script>
+</body>
+</html>

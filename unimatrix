@@ -1,0 +1,558 @@
+#!/usr/bin/env bash
+# Thin verb router: `./unimatrix <verb> [args...]` dispatches to the one script that already
+# owns that verb, argv/env untouched, then execs it (spec 16). No logic lives here beyond the
+# routing table itself — every target script stays fully functional invoked directly.
+#
+# Project: unimatrix — multi-model swarm orchestrator driven from Claude Code
+# Module:  unimatrix
+# Deps:    swarm-run.sh, swarm-loop.sh, swarm-mon.sh, src/swarm-ctl; install/here additionally use
+#          jq and coreutils (stat, df, readlink, mktemp)
+# Tested:  tests/unimatrix.bats (copied-router-plus-stub-targets harness; sources this file to
+#          unit-test _unimatrix_home in isolation — see the source guard below)
+#
+# Key responsibilities:
+# - FR-1: flat verb -> target map (engine verbs, loop, mon, control verbs), no `ctl` indirection
+# - FR-2: exec the resolved target — no fork-and-wait, no argv rewriting beyond consuming the
+#   verb where the target expects it stripped, no env mutation
+# - P0-FR3: _unimatrix_home — THE one path-resolution order (plan-004 PRD phase 0), so
+#   absolute-path invocation, a PATH symlink (spec 17 FR-3 `unimatrix install`), and a foreign
+#   caller cwd all resolve to the same checkout or fail loudly naming every path tried
+# - FR-4: help/-h/--help -> usage on stdout rc 0; no args or unknown verb -> stderr rc 2
+# - spec 17 FR-3: `unimatrix install [--dry-run] [--prefix <dir>]` — PATH symlink,
+#   ~/.config/unimatrix/config (read-merge-write), and the self-marketplace + plugin block in every
+#   account settings.json (jq merge, backed up once) — idempotent, never fatal on a hard refuse
+# - spec 17 FR-4: `unimatrix here` — bootstraps the CURRENT cwd as a swarm target: refuses on a
+#   non-local fs first, then .bus/swarm.conf/.gitignore/fleet.json registry, then the cockpit URL
+# - plan 004 P2: `unimatrix report [--html]` — plain form execs src/speedwars-report.sh; --html
+#   embeds that same script's --json aggregates + text table into a self-contained static page
+#
+# Design constraints:
+# - call/run/verify/doctor/config keep the verb in argv (swarm-run.sh dispatches on it itself);
+#   plan/loop/mon strip their own prefix before passing the rest through unmodified.
+# - Dispatch runs only when this file is EXECUTED (guarded below) — sourcing it (as the bats test
+#   harness and any future caller do) defines _unimatrix_home without side effects or exiting.
+#   `set -euo pipefail`/`shopt` live INSIDE that same guard for the same reason: they are process-
+#   wide, so setting them at file scope silently re-armed errexit in whatever shell sourced us.
+
+# _unimatrix_home — P0-FR3: the one path-resolution order for locating the unimatrix engine
+# checkout. Precedence, each step validated against the same "contains the engine" signal
+# (swarm-run.sh present) so a wrong-checkout guess is never silently returned:
+#   1. $UNIMATRIX_HOME, if set.
+#   2. This router's own directory, resolved through symlinks (readlink -f) — so `unimatrix
+#      install`'s PATH symlink (spec 17 FR-3) still finds the real checkout, not ~/.local/bin.
+#   3. `git rev-parse --show-toplevel` from the caller's cwd.
+#   4. Loud failure: nonzero rc, one stderr line per path tried and why it was rejected — a
+#      wrong-checkout dispatch that runs is strictly worse than a refusal that doesn't (spec 17
+#      FR-6, pre-mortem #7).
+# Prints the resolved absolute path on stdout. Callers: this file's own dispatch below.
+_unimatrix_home() {
+  local tried=()
+
+  if [[ -n "${UNIMATRIX_HOME:-}" ]]; then
+    if [[ -f "$UNIMATRIX_HOME/swarm-run.sh" ]]; then
+      printf '%s\n' "$UNIMATRIX_HOME"
+      return 0
+    fi
+    tried+=("\$UNIMATRIX_HOME ($UNIMATRIX_HOME) — no swarm-run.sh there")
+  else
+    # shellcheck disable=SC2016 # literal $UNIMATRIX_HOME text for the reading operator, not an expansion
+    tried+=('$UNIMATRIX_HOME — unset')
+  fi
+
+  # Follow the symlink chain by hand instead of `readlink -f`: BSD/macOS readlink has no -f, and
+  # falling back to the UNRESOLVED path made `unimatrix install`'s ~/.local/bin symlink resolve
+  # "self" to the bin dir — the one case step 2 exists for. Plain `readlink` is POSIX everywhere.
+  # Bounded at 20 hops so a symlink loop cannot hang the router. Deliberately duplicated from
+  # src/swarm-lib.sh's _resolve_link: this runs BEFORE the router knows where that file lives.
+  local src="${BASH_SOURCE[0]}" self n=0 t
+  while [[ -L "$src" ]] && (( n < 20 )); do
+    t="$(readlink "$src")" || break
+    if [[ "$t" == /* ]]; then src="$t"; else src="$(dirname "$src")/$t"; fi
+    n=$(( n + 1 ))
+  done
+  self="$(cd "$(dirname "$src")" && pwd -P)"
+  if [[ -f "$self/swarm-run.sh" ]]; then
+    printf '%s\n' "$self"
+    return 0
+  fi
+  tried+=("self dir ($self) — no swarm-run.sh there")
+
+  local top=""
+  if top="$(git rev-parse --show-toplevel 2>/dev/null)" && [[ -f "$top/swarm-run.sh" ]]; then
+    printf '%s\n' "$top"
+    return 0
+  fi
+  if [[ -n "$top" ]]; then
+    tried+=("git rev-parse --show-toplevel ($top) — no swarm-run.sh there")
+  else
+    tried+=('git rev-parse --show-toplevel — not inside a git checkout')
+  fi
+
+  {
+    echo "unimatrix: cannot resolve the engine checkout. Tried, in order:"
+    local i=1 t
+    for t in "${tried[@]}"; do
+      printf '  %d. %s\n' "$i" "$t"
+      i=$((i + 1))
+    done
+    echo "Set \$UNIMATRIX_HOME to the unimatrix checkout root."
+  } >&2
+  return 1
+}
+
+# --- spec 17 FR-3: `unimatrix install` -----------------------------------------------------------
+# Makes the router reachable from $PATH, writes the two-key operator config, and registers the
+# self-marketplace + enables plugin `u` in every account's settings.json — idempotent, re-runnable
+# after every version bump (PRD P1-FR3, pre-mortem #6). Every helper below prints one line per
+# surface ("added"/"unchanged"/"REFUSED") rather than assuming silence means nothing happened.
+# Uses $HOME (never bare `~`) throughout so a test can point a whole install run at a fake tree.
+
+# _follow_symlink <path> — the same bounded (20-hop), BSD-safe symlink-chain walk as
+# _unimatrix_home's inline copy above, minus the final `cd`/`pwd -P` canonicalization: callers here
+# already hold an absolute, already-resolved path to compare against (this checkout's own
+# `unimatrix` file), so re-canonicalizing the containing directory buys nothing.
+_follow_symlink() {
+  local p="$1" n=0 t
+  while [[ -L "$p" ]] && (( n < 20 )); do
+    t="$(readlink "$p")" || break
+    if [[ "$t" == /* ]]; then p="$t"; else p="$(dirname "$p")/$t"; fi
+    n=$(( n + 1 ))
+  done
+  printf '%s\n' "$p"
+}
+
+# _install_symlink <home_abs> <prefix> <dry_run> — FR-3 item 1: symlink <prefix>/unimatrix ->
+# <home_abs>/unimatrix. An existing symlink already pointing here is a no-op; one pointing
+# elsewhere is UPDATED (that is what a version-bump reinstall, or reversing a --prefix change, is
+# for); an existing REGULAR FILE is a hard refuse — install never overwrites something it did not
+# create ([NEEDS CLARIFICATION] 2 in specs/17-plugin.md, resolved in its Resolutions subsection).
+# Returns 1 only on the hard-refuse path, so the caller's aggregate rc reflects it without aborting
+# the other two surfaces.
+_install_symlink() {
+  local home_abs="$1" prefix="$2" dry_run="$3"
+  local src="$home_abs/unimatrix" target="$prefix/unimatrix"
+
+  case ":${PATH}:" in
+    *":$prefix:"*) ;;
+    *) echo "install: note       $prefix is not on \$PATH — the symlink is correct; add it to \$PATH to run 'unimatrix' bare" ;;
+  esac
+
+  if [[ -L "$target" ]]; then
+    local cur; cur="$(_follow_symlink "$target")"
+    if [[ "$cur" == "$src" ]]; then
+      echo "install: symlink    unchanged  $target -> $src"
+      return 0
+    fi
+    if (( dry_run )); then
+      echo "install: symlink    would update  $target -> $src (was $cur)"
+      return 0
+    fi
+    ln -sf "$src" "$target"
+    echo "install: symlink    added      $target -> $src"
+    return 0
+  fi
+
+  if [[ -e "$target" ]]; then
+    echo "install: symlink    REFUSED    $target exists and is not a symlink install created — remove it or pass --prefix <dir>" >&2
+    return 1
+  fi
+
+  if (( dry_run )); then
+    echo "install: symlink    would add  $target -> $src"
+    return 0
+  fi
+  mkdir -p "$prefix"
+  ln -s "$src" "$target"
+  echo "install: symlink    added      $target -> $src"
+}
+
+# _install_config <home_abs> <dry_run> — FR-3 item 2: ~/.config/unimatrix/config, bash-sourceable
+# KEY=VALUE (swarm.conf's own shape). READ-MERGE-WRITE: an existing line for either managed key is
+# left untouched (never clobber an operator's own edit); only a genuinely ABSENT key gets added.
+# ENV_MASTER_FILE's default is written as the LIVE expression (not a resolved absolute path) so it
+# keeps honoring $XDG_CONFIG_HOME/$HOME at every future `source`, exactly like every other reader of
+# this same default already does (src/swarm-lib.sh, swarm-run.sh, CLAUDE.md §Conventions).
+_install_config() {
+  local home_abs="$1" dry_run="$2"
+  local cfg_dir="${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix"
+  local cfg="$cfg_dir/config"
+  # shellcheck disable=SC2016 # literal placeholder text written INTO the config file, not expanded here
+  local envm_default='${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix/env.master'
+
+  local existing=""
+  [[ -f "$cfg" ]] && existing="$(cat "$cfg")"
+
+  local add=()
+  # printf %q: the config is bash-SOURCED — an unquoted path with spaces/metachars would execute
+  # as commands and leave UNIMATRIX_HOME unset (cross-review finding).
+  grep -qE '^UNIMATRIX_HOME=' <<<"$existing" || add+=("UNIMATRIX_HOME=$(printf '%q' "$home_abs")")
+  grep -qE '^ENV_MASTER_FILE=' <<<"$existing" || add+=("ENV_MASTER_FILE=$(printf '%q' "$envm_default")")
+
+  if (( ${#add[@]} == 0 )); then
+    echo "install: config     unchanged  $cfg"
+    return 0
+  fi
+
+  if (( dry_run )); then
+    local a
+    for a in "${add[@]}"; do echo "install: config     would add   $a  ($cfg)"; done
+    return 0
+  fi
+
+  mkdir -p "$cfg_dir"
+  {
+    [[ -n "$existing" ]] && printf '%s\n' "$existing"
+    printf '%s\n' "${add[@]}"
+  } > "$cfg"
+  local a
+  for a in "${add[@]}"; do echo "install: config     added      $a  ($cfg)"; done
+}
+
+# _install_settings_one <file> <home_abs> <dry_run> — FR-3 item 3, one target settings.json: adds
+# the "unimatrix" directory-sourced self-marketplace + enables "u@unimatrix" — the exact shape the
+# live "agnes" directory marketplace already carries on this box (plans/004 discovery.md §3) — via
+# a `.foo = X` jq MERGE (never a whole-object rewrite) so every unrelated key survives untouched.
+# The pre-edit file is backed up ONCE: a backup that already exists from a prior install is never
+# clobbered, so it stays the true "before unimatrix ever touched this" copy across every version bump.
+#
+# The actual mutation (backup + jq merge + mv) is wrapped in `flock -x` on a sibling `<file>.lock`
+# (cross-review finding, same idiom as _ledger_append_row's sidecar lock in src/swarm-lib.sh): two
+# writers of the SAME settings.json racing this read-modify-mv — two `install` invocations, or an
+# account processed twice in one run — would otherwise interleave, and whichever `mv` lands last
+# silently discards the other's edit. jq reads `$f` live at merge time, so holding the lock across
+# that merge is what makes the read see this run's own freshest content rather than the unlocked
+# preview below. The preview (dry-run message, "unchanged" fast path) never writes, so it stays
+# lock-free — `--dry-run`'s documented "writes nothing anywhere" holds exactly, never even a
+# transient lock file. Never fatal: a lock that can't be acquired (e.g. an unwritable settings
+# dir) degrades to the old unlocked behavior rather than aborting the install. The lock file is
+# removed once released — unlike the ledger's, this one has no reason to outlive its one mutation.
+_install_settings_one() {
+  local f="$1" home_abs="$2" dry_run="$3"
+  local wanted
+  if ! wanted="$(jq -c --arg path "$home_abs" \
+        '.extraKnownMarketplaces.unimatrix = {source:{source:"directory", path:$path}}
+         | .enabledPlugins["u@unimatrix"] = true' "$f" 2>/dev/null)"; then
+    echo "install: settings   ERROR      $f does not parse as JSON — skipped" >&2
+    return 1
+  fi
+
+  local current; current="$(jq -c '.' "$f" 2>/dev/null || true)"
+  if [[ "$current" == "$wanted" ]]; then
+    echo "install: settings   unchanged  $f"
+    return 0
+  fi
+
+  if (( dry_run )); then
+    echo "install: settings   would add  $f (marketplace 'unimatrix' + plugin 'u@unimatrix')"
+    return 0
+  fi
+
+  local lockfile="$f.lock" lockfd=""
+  if exec {lockfd}>"$lockfile" 2>/dev/null; then
+    flock -x "$lockfd" 2>/dev/null || true
+  else
+    lockfd=""
+  fi
+
+  local bak="$f.bak.unimatrix-install"
+  [[ -e "$bak" ]] || cp "$f" "$bak"
+
+  local tmp; tmp="$(mktemp "$f.XXXXXX")"
+  jq --arg path "$home_abs" \
+     '.extraKnownMarketplaces.unimatrix = {source:{source:"directory", path:$path}}
+      | .enabledPlugins["u@unimatrix"] = true' "$f" > "$tmp"
+  mv "$tmp" "$f"
+
+  if [[ -n "$lockfd" ]]; then
+    exec {lockfd}>&-
+    rm -f "$lockfile"
+  fi
+  echo "install: settings   added      $f"
+}
+
+# _install_settings <home_abs> <dry_run> — FR-3 item 3's target set: ~/.claude/settings.json plus
+# EVERY ~/.claude-acct/*/settings.json that exists (PRD §9 resolution 2 — all of them; no hardcoded
+# account list, so a newly-added account is covered the next time install runs with no code change).
+_install_settings() {
+  local home_abs="$1" dry_run="$2" rc=0 f
+  local targets=()
+  [[ -f "$HOME/.claude/settings.json" ]] && targets+=("$HOME/.claude/settings.json")
+  for f in "$HOME"/.claude-acct/*/settings.json; do
+    [[ -f "$f" ]] && targets+=("$f")
+  done
+
+  if (( ${#targets[@]} == 0 )); then
+    echo "install: settings   no target settings.json files found under \$HOME"
+    return 0
+  fi
+
+  for f in "${targets[@]}"; do
+    _install_settings_one "$f" "$home_abs" "$dry_run" || rc=1
+  done
+  return "$rc"
+}
+
+# cmd_install [--dry-run] [--prefix <dir>] — FR-3: the three idempotent surfaces above, run in
+# order, aggregated into one rc (nonzero iff any surface hard-refused). --dry-run prints every
+# planned action and writes nothing anywhere (no mkdir, no symlink, no file write).
+cmd_install() {
+  local dry_run=0 prefix="$HOME/.local/bin"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry_run=1; shift ;;
+      --prefix)
+        [[ $# -ge 2 ]] || { echo "unimatrix install: --prefix needs a directory argument" >&2; return 2; }
+        prefix="$2"; shift 2 ;;
+      --prefix=*) prefix="${1#*=}"; shift ;;
+      *) echo "unimatrix install: unknown argument '$1'" >&2; return 2 ;;
+    esac
+  done
+
+  local home_abs; home_abs="$(_unimatrix_home)" || return 1
+  local rc=0
+  _install_symlink "$home_abs" "$prefix" "$dry_run" || rc=1
+  _install_config "$home_abs" "$dry_run" || rc=1
+  _install_settings "$home_abs" "$dry_run" || rc=1
+  return "$rc"
+}
+
+# --- spec 17 FR-4: `unimatrix here` ---------------------------------------------------------------
+# Bootstraps the CURRENT working directory as a swarm target — never walks up to a git toplevel;
+# the operator is standing exactly where they want the bus (FR-4's "any cwd").
+
+# _here_refuse_fs <dir> — reuses cmd_doctor's own fstype-detection pattern verbatim (swarm-run.sh:
+# GNU `stat -f -c %T`, falling back to `df -PT`, else "unknown"), but as a BLOCKING refusal instead
+# of doctor's diagnostic warning: `here` must create nothing at all on a 9p/drvfs/fuseblk/nfs/cifs/
+# smb mount (rules/unimatrix/bus-discipline.md — O_APPEND/flock/inotify all break there). Echoes the
+# offending fstype and returns 1 on a hit; silent, returns 0, on a local fs.
+_here_refuse_fs() {
+  local dir="$1" fstype=""
+  fstype="$(stat -f -c %T "$dir" 2>/dev/null || true)"
+  [[ -n "$fstype" ]] || fstype="$(df -PT "$dir" 2>/dev/null | awk 'NR==2{print $2}' || true)"
+  [[ -n "$fstype" ]] || fstype="unknown"
+  case "$fstype" in
+    9p|v9fs|drvfs|fuseblk|nfs|nfs4|cifs|smb|smbfs)
+      printf '%s\n' "$fstype"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# _gitignore_covers_bus <gitignore-file> — FR-4 item 4's "if not already covered": either the exact
+# `.bus*` glob this command writes, or the engine repo's own pre-existing two-line form (`.bus/` +
+# `.bus-*/`) that predates this spec — both already keep every bus variant out of git.
+_gitignore_covers_bus() {
+  local gi="$1"
+  grep -qxF '.bus*' "$gi" 2>/dev/null && return 0
+  grep -qxF '.bus/' "$gi" 2>/dev/null && grep -qxF '.bus-*/' "$gi" 2>/dev/null && return 0
+  return 1
+}
+
+# _here_fleet_registry <repo_root> <bus_dir> — FR-4 item 5 / specs/17-plugin.md open-question 3's
+# accepted substitute (see its Resolutions subsection): a well-formed ~/.config/unimatrix/fleet.json
+# entry keyed by repo REALPATH, so a rerun updates in place rather than appending a duplicate. This
+# is a registry only — no policy lives here, and nothing reads it back within this spec.
+_here_fleet_registry() {
+  local repo_root="$1" bus="$2"
+  local fj_dir="${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix"
+  local fj="$fj_dir/fleet.json"
+  mkdir -p "$fj_dir"
+  [[ -f "$fj" ]] || echo '{}' > "$fj"
+
+  local bus_real; bus_real="$(cd "$bus" 2>/dev/null && pwd -P)" || bus_real="$bus"
+  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  local tmp; tmp="$(mktemp "$fj.XXXXXX")"
+  jq --arg repo "$repo_root" --arg bus "$bus_real" --arg ts "$ts" \
+     '.[$repo] = {repo:$repo, bus:$bus, added:$ts}' "$fj" > "$tmp"
+  mv "$tmp" "$fj"
+  echo "here: fleet.json    updated    $fj"
+}
+
+# cmd_here — FR-4: local-fs refusal FIRST and blocking (nothing below runs on a hit), then .bus/
+# swarm.conf/.gitignore/fleet.json in that order, then the cockpit URL (spec 05, loopback :4747).
+cmd_here() {
+  local repo_root; repo_root="$(pwd -P)"
+
+  local bad_fs
+  if ! bad_fs="$(_here_refuse_fs "$repo_root")"; then
+    {
+      echo "unimatrix here: refusing — $repo_root is on a '$bad_fs' filesystem, not local POSIX."
+      echo "  O_APPEND/flock/inotify are unreliable on 9p/drvfs/fuseblk/nfs/cifs/smb mounts (rules/unimatrix/bus-discipline.md)."
+      echo "  Run 'unimatrix here' from a local disk path instead."
+    } >&2
+    return 1
+  fi
+
+  local home_abs; home_abs="$(_unimatrix_home)" || return 1
+
+  local bus="$repo_root/.bus"
+  if [[ ! -d "$bus" ]]; then
+    mkdir -p "$bus/specs" "$bus/queue" "$bus/claimed" "$bus/done" "$bus/limits" "$bus/loop"
+    echo "here: .bus          created    $bus"
+  else
+    echo "here: .bus          exists     $bus"
+  fi
+
+  local conf="$repo_root/swarm.conf"
+  if [[ ! -f "$conf" ]]; then
+    if [[ -f "$home_abs/swarm.conf.example" ]]; then
+      cp "$home_abs/swarm.conf.example" "$conf"
+      echo "here: swarm.conf    seeded     $conf"
+    else
+      echo "here: swarm.conf    MISSING source $home_abs/swarm.conf.example — not seeded" >&2
+    fi
+  else
+    echo "here: swarm.conf    exists     $conf"
+  fi
+
+  local gi="$repo_root/.gitignore"
+  if [[ ! -f "$gi" ]]; then
+    printf '.bus*\n' > "$gi"
+    echo "here: .gitignore    created    $gi"
+  elif _gitignore_covers_bus "$gi"; then
+    echo "here: .gitignore    exists     $gi (.bus already covered)"
+  else
+    printf '\n.bus*\n' >> "$gi"
+    echo "here: .gitignore    updated    $gi"
+  fi
+
+  _here_fleet_registry "$repo_root" "$bus"
+
+  echo "here: cockpit URL   http://127.0.0.1:4747"
+}
+
+# --- plan 004 P2: `unimatrix report [--html] [ledger]` --------------------------------------------
+
+# _html_esc — stdin -> stdout with the three markup-significant characters escaped. The report's
+# own output is lane names and numbers, but the ledger is operator data: never interpolate it raw.
+_html_esc() {
+  sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# cmd_report <home> [--html] [report-args...] — plain form EXECS src/speedwars-report.sh (argv and
+# rc passed straight through, same shape as swarm-ctl's own `report`). `--html` renders a
+# SELF-CONTAINED static page — inline CSS, no network, no new dependency — to
+# <home>/docs/ops/report-<date>.html and prints the path.
+# The page EMBEDS the canonical fold's two existing outputs (`--json` aggregates + the pre-rendered
+# text table); no fold math is duplicated here, so the HTML can never disagree with the terminal.
+cmd_report() {
+  local home="$1"; shift
+  local rep="$home/src/speedwars-report.sh"
+  [[ -f "$rep" ]] || { echo "unimatrix report: missing $rep" >&2; return 2; }
+
+  if [[ "${1:-}" != "--html" ]]; then
+    exec "$rep" "$@"
+  fi
+  shift
+
+  local out; out="$home/docs/ops/report-$(date +%F).html"
+  mkdir -p "$(dirname "$out")"
+  local json table
+  json="$(bash "$rep" --json "$@")" || return 1
+  table="$(bash "$rep" "$@")" || return 1
+
+  {
+    echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+    echo '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    echo '<title>unimatrix speedwars report</title><style>'
+    echo 'body{font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:2rem;'
+    echo 'background:#12141a;color:#dfe3ea}h1{font-size:1.2rem;margin:0 0 .25rem}'
+    echo 'h2{font-size:.95rem;margin:2rem 0 .5rem;color:#8fb4ff;font-weight:600}'
+    echo 'p.meta{margin:0 0 1rem;color:#8b93a3}'
+    echo 'pre{background:#1b1e26;border:1px solid #2a2f3a;border-radius:6px;padding:1rem;'
+    echo 'overflow-x:auto;margin:0}</style></head><body>'
+    echo '<h1>unimatrix speedwars report</h1>'
+    printf '<p class="meta">generated %s — canonical fold: src/speedwars-report.sh</p>\n' \
+      "$(date -u +%FT%TZ)"
+    echo '<h2>per-lane table (with coverage denominators)</h2><pre>'
+    _html_esc <<<"$table"
+    echo '</pre>'
+    echo '<h2>canonical aggregates (--json contract)</h2><pre id="fold-json">'
+    _html_esc <<<"$json"
+    echo '</pre></body></html>'
+  } > "$out"
+
+  printf '%s\n' "$out"
+}
+
+# FR-4: usage listing — grouped by verb family; alias is an operator opt-in, not shipped here.
+usage() {
+  cat <<'EOF'
+usage: unimatrix <verb> [args...]
+
+  engine verbs   call | run | verify | doctor [--live|--plugin] | config | plan "<question>"
+  setup verbs    install [--dry-run] [--prefix <dir>] | here
+  loop           loop <init|iterate|run> <id> ...
+  monitor        mon ...
+  control verbs  pause | resume | cancel | add | abort | status | kill | nudge |
+                 pause-worker | resume-worker | unpark | heartbeat |
+                 watchdog-arm | watchdog-check | watchdog-disarm |
+                 postmortem | review-stub
+  reporting      report [--html] [--run <label>] [ledger]
+  help           help | -h | --help
+
+Operator opt-in: alias u=unimatrix
+EOF
+}
+
+# Dispatch only when executed directly — sourcing (tests/unimatrix.bats' resolver unit tests)
+# must define the function above and stop there, never consume argv or exit the caller's shell.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  set -euo pipefail
+  shopt -s inherit_errexit
+
+  SCRIPT_DIR="$(_unimatrix_home)" || exit 1
+
+  if [ $# -eq 0 ]; then
+    usage >&2
+    exit 2
+  fi
+
+  case "$1" in
+    help|-h|--help)
+      usage
+      exit 0
+      ;;
+    call|verify|doctor|config)
+      exec "$SCRIPT_DIR/swarm-run.sh" "$@"
+      ;;
+    run)
+      shift
+      exec "$SCRIPT_DIR/swarm-run.sh" "${@:-""}"
+      ;;
+    plan)
+      shift
+      exec "$SCRIPT_DIR/swarm-run.sh" --plan-only "$@"
+      ;;
+    install)
+      shift
+      cmd_install "$@"
+      ;;
+    here)
+      shift
+      cmd_here "$@"
+      ;;
+    loop)
+      shift
+      exec "$SCRIPT_DIR/swarm-loop.sh" "$@"
+      ;;
+    mon)
+      shift
+      exec "$SCRIPT_DIR/swarm-mon.sh" "$@"
+      ;;
+    report)
+      shift
+      cmd_report "$SCRIPT_DIR" "$@"
+      ;;
+    pause|resume|cancel|add|abort|status|kill|nudge|pause-worker|resume-worker|unpark|heartbeat|watchdog-arm|watchdog-check|watchdog-disarm|postmortem|review-stub)
+      exec "$SCRIPT_DIR/src/swarm-ctl" "$@"
+      ;;
+    *)
+      echo "unimatrix: unknown verb '$1'" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+fi

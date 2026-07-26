@@ -1,0 +1,7 @@
+name = "unimatrix"
+compatibility_date = "2026-07-01"
+routes = [{ pattern = "unimatrix.asajj.cz", custom_domain = true }]
+workers_dev = true
+
+[assets]
+directory = "."

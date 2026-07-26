@@ -1,0 +1,23 @@
+{"ts":"2026-07-20T10:00:00Z","run":"r1","id":"c1","served_lane":"grok","outcome":"done","wall_secs":30,"tokens_out":900,"cost_usd":0.1}
+{"ts":"2026-07-20T10:01:00Z","run":"r1","id":"c2","served_lane":"grok","outcome":"retry","wall_secs":12,"tokens_out":100,"cost_usd":0.02}
+{"ts":"2026-07-20T10:02:00Z","run":"r1","id":"c3","served_lane":"glm","outcome":"done","wall_secs":20,"tokens_out":400,"cost_usd":0.05}
+{"ts":"2026-07-20T10:03:00Z","run":"r1","id":"c4","served_lane":"codex","outcome":"done","wall_secs":40,"tokens_out":800}
+{"ts":"2026-07-20T10:04:00Z","run":"r1","id":"c5","served_lane":"codex","outcome":"timeout","wall_secs":90,"tokens_out":0}
+{"ts":"2026-07-20T10:05:00Z","run":"r1","id":"c2","served_lane":"glm","outcome":"done","wall_secs":60,"tokens_out":1200,"cost_usd":0.3}
+{"ts":"2026-07-20T10:06:00Z","run":"r1","id":"c6","served_lane":"glm","outcome":"done","wall_secs":25,"tokens_out":500,"cost_usd":0.2}
+{"ts":"2026-07-21T09:00:00Z","run":"r2","id":"c1","served_lane":"claude","outcome":"done","wall_secs":15,"tokens_out":300,"cost_usd":0.04}
+{"ts":"2026-07-22T09:00:00Z","run":"r1","id":"c9","served_lane":"kimi","outcome":"done","wall_secs":18,"tokens_out":300,"cost_usd":0.09}
+{"run":"r1","id":"c9","served_lane":"gemini","outcome":"done","wall_secs":5,"tokens_out":50}
+{"ts":"2026-07-23T09:00:00Z","run":"r1","id":"c10","served_lane":"kimi","outcome":"done","wall_secs":10,"tokens_out":200,"cost_usd":0.06}
+{"ts":"2026-07-23T09:05:00Z","run":"r1","id":"c11","served_lane":"gemini","outcome":"done","wall_secs":8,"tokens_out":150,"cost_usd":0.03}
+{"type":"verdict","run":"r1","id":"c1","verified":true,"reason":"first pass: gate read the handoff and believed it"}
+{"type":"verdict","run":"r1","id":"c1","verified":false,"lane":"grok","reason":"re-gate: the tests it claimed to run never ran"}
+{"type":"verdict","run":"r1","id":"c2","verified":false,"reason":"v0 lane-less row: patch does not apply"}
+{"type":"verdict","run":"r1","id":"c3","verified":null,"lane":"glm","reason":"gate inconclusive: fixture missing, could not judge"}
+{"type":"verdict","run":"r1","id":"c6","verified":true,"lane":"glm","reason":"diff verified by a different-family reader lane"}
+{"type":"verdict","run":"r2","id":"c1","verified":true,"reason":"same id as r1/c1, different run — must not inherit its refutation"}
+{"type":"verdict","run":"r1","id":"c9","verified":true,"reason":"tie-break pin: kimi's attempt carries ts, gemini's retry does not — kimi must win final-attempt credit"}
+{"type":"verdict","run":"r1","id":"c10","verified":"pass","reason":"v0 string encoding: pass folds like boolean true"}
+{"type":"verdict","run":"r1","id":"c11","verified":"fail","reason":"v0 string encoding: fail folds like boolean false — an explicit refutation"}
+{"type":"run-meta","run":"r1","cards":{"c1":{"complexity":2},"c2":{"complexity":3}},"fanout":6}
+{"type":"review","run":"r1","lane":"grok","score":2,"tags":["false-done"],"note":"claimed done, nothing ran"}

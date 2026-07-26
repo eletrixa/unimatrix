@@ -1,0 +1,11 @@
+# .pii-allowlist — exact-match emails the PII/secret gate in ./check.sh is allowed to see.
+#
+# The gate greps content dirs for anything shaped like an email and FAILS on a hit.
+# Synthetic / placeholder addresses used in docs, specs, and test fixtures live here so
+# they don't trip the gate. One address per line; matching is exact (grep -xF), not prefix.
+# Comment lines (leading #) and blank lines are ignored. Add ONLY addresses that are
+# provably fake — never a real person's address.
+alice@example.com
+bob@example.com
+user@example.com
+noreply@anthropic.com

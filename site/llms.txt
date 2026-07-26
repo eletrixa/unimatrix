@@ -1,0 +1,39 @@
+# UNIMATRIX
+
+> Multi-model agent orchestration driven from Claude Code, in pure bash. A JSONL file-bus on
+> ext4 coordinates five heterogeneous model lanes (claude, codex, gemini, glm, grok) — no MCP, no
+> daemon, no database. A judge never grades its own work: verification always runs on a
+> different lane than the one that produced the answer.
+
+## Quickstart
+
+- [Quickstart](https://unimatrix.asajj.cz/#quickstart): prerequisites, clone, first run, cockpit, mid-run control — copy-paste path to a working swarm.
+- [Guide](https://unimatrix.asajj.cz/guide.html): prompt-first cookbook for driving `/swarm` and `/swarm-loop` from inside a Claude Code session — no bash required.
+- [agents.md](https://unimatrix.asajj.cz/agents.md): executable contract for an agent operating this repo directly — setup, bus contract, lane invocations, boundaries.
+
+## Architecture
+
+- [What it is](https://unimatrix.asajj.cz/#what): the bus lifecycle (`specs/ → queue/ → claimed/ → done/ → verify → synthesis`), one state transition per file move.
+- [Lanes](https://unimatrix.asajj.cz/#lanes): five model lanes — claude, codex, gemini, glm, grok. The in-session orchestrator plans and synthesizes; a different lane always verifies. The stranger-safe default exec chain is `claude:haiku → codex:default`, so a fresh clone runs with no extra keys.
+- [Modes](https://unimatrix.asajj.cz/#modes): `/swarm` (one round, fan out and cross-verify) vs `/swarm-loop` (iterate exec → oracle → review until criteria genuinely hold).
+- [specs/](https://github.com/eletrixa/unimatrix/tree/main/specs): the spec set this system is built against — start at `specs/README.md`.
+
+## Rules
+
+- [The rules that carry it](https://unimatrix.asajj.cz/#rules): handoff-file-only answers, atomic-rename claiming, judge ≠ executor, no silent spend.
+- [rules/unimatrix/bus-discipline.md](https://github.com/eletrixa/unimatrix/blob/main/rules/unimatrix/bus-discipline.md): filesystem constraints, one-writer-per-file, atomic claiming, lease heartbeats, firehose pipeline.
+- [rules/unimatrix/model-lanes.md](https://github.com/eletrixa/unimatrix/blob/main/rules/unimatrix/model-lanes.md): exact child-env spawn contracts per lane, failover signatures, least-privilege env.
+- [rules/unimatrix/loop-discipline.md](https://github.com/eletrixa/unimatrix/blob/main/rules/unimatrix/loop-discipline.md): criteria contract, judge ≠ executor, stop rules, halting.
+
+## Ops
+
+- [docs/usage.md](https://github.com/eletrixa/unimatrix/blob/main/docs/usage.md): full operator guide — every command in this repo verified against the code.
+- [swarm.conf](https://github.com/eletrixa/unimatrix/blob/main/swarm.conf): the bash-sourceable config — lanes, fallback chain, iteration/budget caps, ledger toggle.
+- [docs/ops/llm-runs.md](https://github.com/eletrixa/unimatrix/blob/main/docs/ops/llm-runs.md): run-evidence ledger — every spawned run's lane, workload, and actual billed cost.
+- [docs/versions.md](https://github.com/eletrixa/unimatrix/blob/main/docs/versions.md): pinned CLI/model versions and re-smoke triggers.
+- [Honest status](https://unimatrix.asajj.cz/#status): what's shipped and live-verified vs. known edges (attended-by-default, gemini read-only in v1).
+
+## Family
+
+- [The Collective](https://collective.asajj.cz): sister project — the cockpit this swarm assumes (WezTerm + WSL2 + tmux + Claude Code settings, rules, skills, multi-account). Install the Collective first; Unimatrix commands the swarm from inside it.
+- [Collective llms.txt](https://collective.asajj.cz/llms.txt)

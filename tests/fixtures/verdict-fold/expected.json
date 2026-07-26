@@ -1,0 +1,76 @@
+{
+  "lanes": {
+    "claude": {
+      "attempts": 1,
+      "cards": 1,
+      "verified_done": 1,
+      "false_done": 0,
+      "unjudged_done": 0,
+      "failed": 0,
+      "inconclusive": 0,
+      "cost_total": 0.04,
+      "cost_priced": 1,
+      "cost_per_verified_done": 0.04
+    },
+    "codex": {
+      "attempts": 2,
+      "cards": 2,
+      "verified_done": 0,
+      "false_done": 0,
+      "unjudged_done": 1,
+      "failed": 1,
+      "inconclusive": 0,
+      "cost_total": null,
+      "cost_priced": 0,
+      "cost_per_verified_done": null
+    },
+    "glm": {
+      "attempts": 3,
+      "cards": 3,
+      "verified_done": 1,
+      "false_done": 1,
+      "unjudged_done": 1,
+      "failed": 0,
+      "inconclusive": 1,
+      "cost_total": 0.55,
+      "cost_priced": 3,
+      "cost_per_verified_done": 0.55
+    },
+    "grok": {
+      "attempts": 2,
+      "cards": 1,
+      "verified_done": 0,
+      "false_done": 1,
+      "unjudged_done": 0,
+      "failed": 0,
+      "inconclusive": 0,
+      "cost_total": 0.12,
+      "cost_priced": 2,
+      "cost_per_verified_done": null
+    },
+    "kimi": {
+      "attempts": 2,
+      "cards": 2,
+      "verified_done": 2,
+      "false_done": 0,
+      "unjudged_done": 0,
+      "failed": 0,
+      "inconclusive": 0,
+      "cost_total": 0.15,
+      "cost_priced": 2,
+      "cost_per_verified_done": 0.075
+    },
+    "gemini": {
+      "attempts": 2,
+      "cards": 1,
+      "verified_done": 0,
+      "false_done": 1,
+      "unjudged_done": 0,
+      "failed": 0,
+      "inconclusive": 0,
+      "cost_total": 0.03,
+      "cost_priced": 1,
+      "cost_per_verified_done": null
+    }
+  }
+}

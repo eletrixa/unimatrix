@@ -1,0 +1,273 @@
+/**
+ * MISSION CONTROL styles — scoped exclusively under #view-grid.
+ *
+ * Project: unimatrix — multi-model swarm orchestrator driven from Claude Code
+ * Module:  site/cockpit/grid.css
+ * Deps:    base.css design tokens (--panel, --dim, --accent, …); design §1.2 D layout
+ * Tested:  n/a
+ *
+ * Key responsibilities:
+ * - Left attention rail (262px), filter chips, auto-fill tile grid (minmax 112px).
+ * - Tile state borders/opacity and selected green ring; alert card compact layout.
+ *
+ * Design constraints:
+ * - ALL selectors start with #view-grid — never style shell chrome or other views.
+ * - Colors/sizes match cockpit.dc.html mission-control markup (plan §1.1 tokens).
+ * - No invented decorative content; empty/absent states are structural only.
+ */
+
+/* --- layout shell --------------------------------------------------------------------------- */
+#view-grid {
+  /* shell .view already flex-column; fill remaining viewport height */
+  overflow: hidden;
+}
+#view-grid .mc {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* --- left attention rail (262px) ------------------------------------------------------------ */
+#view-grid .mc-rail {
+  flex: none;
+  width: 262px;
+  border-right: 1px solid rgba(94, 234, 166, 0.13);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  overflow-y: auto;
+}
+#view-grid .mc-rail-title {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+#view-grid .mc-alert {
+  background: #0c120e;
+  border: 1px solid rgba(224, 179, 74, 0.5);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+#view-grid .mc-alert-head {
+  font-size: 14px;
+}
+#view-grid .mc-alert-head span {
+  font-size: 12px;
+}
+#view-grid .mc-alert-sub {
+  color: #93a89c;
+  font-size: 11px;
+  margin: 3px 0 8px;
+}
+#view-grid .mc-alert-acts {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+#view-grid .mc-alert-verb {
+  font-family: inherit;
+  font-size: 10.5px;
+  white-space: nowrap;
+  background: #101812;
+  border: 1px solid;
+  border-radius: 4px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+#view-grid .mc-alert-verb:hover {
+  filter: brightness(1.15);
+}
+#view-grid .mc-alert-insp {
+  font-family: inherit;
+  font-size: 10.5px;
+  white-space: nowrap;
+  background: none;
+  color: #93a89c;
+  border: 1px solid rgba(94, 234, 166, 0.13);
+  border-radius: 4px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+#view-grid .mc-alert-insp:hover {
+  color: #e6f1ea;
+  border-color: rgba(94, 234, 166, 0.28);
+}
+#view-grid .mc-empty {
+  border: 1px dashed rgba(94, 234, 166, 0.28);
+  border-radius: 6px;
+  padding: 14px;
+  color: #93a89c;
+  font-size: 12px;
+}
+#view-grid .mc-rail-foot {
+  margin-top: auto;
+  color: #93a89c;
+  font-size: 10.5px;
+  line-height: 1.6;
+  border-top: 1px solid rgba(94, 234, 166, 0.13);
+  padding-top: 10px;
+}
+
+/* --- main pane (filters + tiles) ------------------------------------------------------------ */
+#view-grid .mc-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+#view-grid .mc-main-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+#view-grid .mc-main-title {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  color: #34d399;
+  text-transform: uppercase;
+}
+#view-grid .mc-main-legend {
+  color: #93a89c;
+  font-size: 11px;
+}
+#view-grid .mc-pulse-leg {
+  color: #7dd3fc;
+}
+
+/* --- filter chips --------------------------------------------------------------------------- */
+#view-grid .mc-filters {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+#view-grid .mc-chip {
+  font-family: inherit;
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  padding: 2px 11px;
+  border-radius: 10px;
+  border: 1px solid rgba(94, 234, 166, 0.2);
+  color: #93a89c;
+  background: transparent;
+  cursor: pointer;
+}
+#view-grid .mc-chip:hover {
+  border-color: #34d399;
+  color: #e6f1ea;
+}
+#view-grid .mc-chip.on {
+  background: #34d399;
+  color: #052e1e;
+  border-color: #34d399;
+}
+#view-grid .mc-chip.on:hover {
+  color: #052e1e;
+  border-color: #4ae0a8;
+  background: #4ae0a8;
+}
+#view-grid .mc-lane-chip {
+  min-width: 1.8em;
+  text-align: center;
+  padding-left: 8px;
+  padding-right: 8px;
+  font-weight: 400;
+}
+#view-grid .mc-chip-sep {
+  display: inline-block;
+  width: 1px;
+  height: 14px;
+  background: rgba(94, 234, 166, 0.13);
+  margin: 0 2px;
+}
+
+/* --- tile grid ------------------------------------------------------------------------------ */
+#view-grid .mc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 7px;
+}
+#view-grid .mc-grid-empty {
+  grid-column: 1 / -1;
+  color: #93a89c;
+  font-size: 12px;
+  padding: 24px 8px;
+  border: 1px dashed rgba(94, 234, 166, 0.13);
+  border-radius: 6px;
+  text-align: center;
+}
+#view-grid .mc-tile {
+  background: #0c120e;
+  border: 1px solid rgba(94, 234, 166, 0.13);
+  border-radius: 6px;
+  padding: 7px 9px;
+  cursor: pointer;
+  min-width: 0;
+}
+#view-grid .mc-tile:hover {
+  border-color: #34d399 !important;
+}
+#view-grid .mc-tile.is-sel {
+  /* ring also set inline via box-shadow; class is a hook for focus/QA */
+}
+#view-grid .mc-tile:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #34d399;
+}
+#view-grid .mc-tile-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+}
+#view-grid .mc-tile-id {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+#view-grid .mc-tile-lane {
+  font-size: 9.5px;
+  border: 1px solid;
+  border-radius: 3px;
+  padding: 0 4px;
+  flex: none;
+  line-height: 1.4;
+}
+#view-grid .mc-tile-lane-none {
+  color: #93a89c;
+  border-color: rgba(94, 234, 166, 0.13);
+}
+#view-grid .mc-tile-pulse {
+  color: #7dd3fc;
+  font-size: 10px;
+  letter-spacing: 1px;
+  margin: 3px 0 1px;
+  line-height: 1;
+}
+#view-grid .mc-tile-act {
+  color: #93a89c;
+  font-size: 9.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 3px;
+}
+#view-grid .mc-tile-bot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  gap: 4px;
+}
+#view-grid .mc-tile-tok {
+  color: #93a89c;
+  flex: none;
+}

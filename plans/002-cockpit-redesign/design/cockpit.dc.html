@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#070b09;color:#e6f1ea;font-family:'Share Tech Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;font-size:13px;line-height:1.45}
+body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.5;background-image:linear-gradient(rgba(94,234,166,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(94,234,166,.04) 1px,transparent 1px);background-size:56px 56px;-webkit-mask-image:radial-gradient(ellipse 90% 70% at 50% 0%,#000 30%,transparent 75%);mask-image:radial-gradient(ellipse 90% 70% at 50% 0%,#000 30%,transparent 75%)}
+a{color:#34d399;text-decoration:none}a:hover{color:#4ae0a8;text-decoration:underline}
+::selection{background:#34d399;color:#052e1e}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#101812;border:1px solid rgba(94,234,166,.13);border-radius:5px}::-webkit-scrollbar-track{background:transparent}
+@keyframes blink{0%,100%{opacity:.2}50%{opacity:1}}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+</style>
+</helmet>
+<div style="position:relative;z-index:1;height:100vh;display:flex;flex-direction:column;min-width:1280px;overflow:hidden">
+
+<header style="flex:none;display:flex;align-items:center;gap:26px;height:52px;padding:0 18px;background:rgba(7,11,9,.85);border-bottom:1px solid rgba(94,234,166,.28)">
+<div style="display:flex;align-items:baseline;gap:9px"><span style="font-size:15px;letter-spacing:.06em">UNIMATRIX</span><span style="font-size:10px;letter-spacing:.22em;color:#34d399;text-transform:uppercase">▚ Cockpit</span></div>
+<nav style="display:flex;gap:4px;height:100%">
+<sc-for list="{{ tabs }}" as="t" hint-placeholder-count="3">
+<div onClick="{{t.go}}" style="display:flex;align-items:center;padding:0 16px;cursor:pointer;font-size:12px;letter-spacing:.1em;color:{{t.tc}};border-bottom:2px solid {{t.bb}}" style-hover="color:#e6f1ea">{{t.label}}</div>
+</sc-for>
+</nav>
+<div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+<span style="color:#93a89c;font-size:11px">run r-0719 · loop 3/12 · <span style="color:#e6f1ea">{{elapsed}}</span></span>
+<span style="color:#1d8a63;font-size:10px">1·2·3 views · esc closes</span>
+<span style="width:7px;height:7px;border-radius:50%;background:#34d399;box-shadow:0 0 6px #34d399;animation:blink 2s ease-in-out infinite"></span>
+<button onClick="{{pauseAll}}" style="font-family:inherit;font-size:11px;letter-spacing:.05em;background:#101812;color:#e6f1ea;border:1px solid rgba(94,234,166,.28);border-radius:4px;padding:5px 12px;cursor:pointer" style-hover="border-color:#34d399;color:#34d399">{{pauseLabel}}</button>
+<button onClick="{{addSpec}}" style="font-family:inherit;font-size:11px;letter-spacing:.05em;background:#101812;color:#e6f1ea;border:1px solid rgba(94,234,166,.28);border-radius:4px;padding:5px 12px;cursor:pointer" style-hover="border-color:#34d399;color:#34d399">+ ADD SPEC</button>
+<button onClick="{{abort}}" style="font-family:inherit;font-size:11px;letter-spacing:.05em;background:#101812;color:#f97066;border:1px solid rgba(249,112,102,.4);border-radius:4px;padding:5px 12px;cursor:pointer" style-hover="background:rgba(249,112,102,.12)">ABORT</button>
+</div>
+</header>
+
+<div style="flex:none;display:flex;align-items:center;gap:18px;padding:8px 18px;background:#0c120e;border-bottom:1px solid rgba(94,234,166,.13);font-size:12px;flex-wrap:wrap">
+<span style="color:#93a89c"><b style="color:#e6f1ea;font-weight:400">{{cQueued}}</b> queued</span>
+<span style="color:#93a89c"><b style="color:#e6f1ea;font-weight:400">{{cClaimed}}</b> claimed</span>
+<span style="color:#93a89c"><b style="color:#34d399;font-weight:400">{{cDone}}</b> done</span>
+<span style="color:#93a89c"><b style="color:#e6f1ea;font-weight:400">{{cCancelled}}</b> cancelled</span>
+<sc-if value="{{isPaused}}" hint-placeholder-val="{{ false }}"><span style="color:#e0b34a;border:1px solid rgba(224,179,74,.5);border-radius:4px;padding:0 8px">‖ CLAIMS BLOCKED</span></sc-if>
+<sc-if value="{{hasWarns}}" hint-placeholder-val="{{ true }}"><span style="color:#e0b34a">⚠ <b style="font-weight:400">{{cStale}}</b> stale · <b style="font-weight:400">{{cParked}}</b> parked</span></sc-if>
+<sc-if value="{{hasErr}}" hint-placeholder-val="{{ true }}"><span style="color:#f97066">✕ <b style="font-weight:400">{{cErr}}</b> erroring</span></sc-if>
+<span style="display:flex;align-items:center;gap:7px;color:#93a89c">gate<span style="width:110px;height:7px;border:1px solid rgba(94,234,166,.28);border-radius:4px;overflow:hidden;display:inline-flex"><span style="width:{{gatePct}}%;background:#34d399"></span><span style="width:{{gateParkPct}}%;background:#e0b34a"></span></span><span style="color:#e6f1ea">{{gateTxt}}</span></span>
+<span style="display:flex;align-items:center;gap:7px;color:#93a89c">budget<span style="width:90px;height:7px;border:1px solid rgba(94,234,166,.28);border-radius:4px;overflow:hidden;display:inline-flex"><span style="width:{{budPct}}%;background:{{budColor}}"></span></span><span style="color:#e6f1ea">${{spent}} / $10</span></span>
+<span style="margin-left:auto;display:flex;align-items:center;gap:10px;color:#93a89c">burn <b style="color:#34d399;font-weight:400">${{burnTotal}}/min</b>
+<sc-for list="{{ laneBurn }}" as="lb" hint-placeholder-count="4"><span style="color:{{lb.c}}">{{lb.k}} ${{lb.v}}</span></sc-for>
+</span>
+</div>
+
+<sc-if value="{{isOps}}" hint-placeholder-val="{{ true }}">
+<main data-screen-label="Ops Wall" style="flex:1;min-height:0;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:14px">
+<div style="display:flex;gap:16px;align-items:stretch">
+<div style="flex:none;width:400px;background:#0c120e;border:1px solid rgba(94,234,166,.13);border-radius:6px;padding:16px 20px;display:flex;flex-direction:column;justify-content:center">
+<div style="font-size:11px;letter-spacing:.2em;color:#93a89c;text-transform:uppercase;margin-bottom:6px">swarm status</div>
+<div style="font-size:30px;line-height:1.1;color:{{verdictC}}">{{verdictTxt}}</div>
+<div style="color:#93a89c;margin-top:10px;font-size:12px">{{cRunning}} running · {{cQueued}} queued · <span style="color:#e6f1ea">{{cDone}}/50 done</span> · est {{eta}} left</div>
+</div>
+<div style="flex:1;display:flex;gap:10px">
+<sc-for list="{{ alerts }}" as="al" hint-placeholder-count="3">
+<div style="flex:1;background:#0c120e;border:1px solid {{al.bc}};border-radius:6px;padding:12px 14px;display:flex;flex-direction:column;gap:4px">
+<div style="font-size:16px;color:#e6f1ea">{{al.id}} <span style="color:{{al.c}}">{{al.title}}</span></div>
+<div style="color:#93a89c;font-size:11.5px;flex:1">{{al.sub}}</div>
+<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button onClick="{{al.act}}" style="font-family:inherit;font-size:11px;white-space:nowrap;background:#101812;color:{{al.c}};border:1px solid {{al.bc}};border-radius:4px;padding:4px 10px;cursor:pointer" style-hover="background:rgba(94,234,166,.08)">{{al.verb}}</button><button onClick="{{al.open}}" style="font-family:inherit;font-size:11px;white-space:nowrap;background:none;color:#93a89c;border:1px solid rgba(94,234,166,.13);border-radius:4px;padding:4px 10px;cursor:pointer" style-hover="color:#e6f1ea">inspect →</button></div>
+</div>
+</sc-for>
+<sc-if value="{{noAlerts}}"><div style="flex:1;border:1px dashed rgba(94,234,166,.28);border-radius:6px;display:flex;align-items:center;justify-content:center;color:#93a89c">no alerts — swarm humming, go make coffee</div></sc-if>
+</div>
+</div>
+<div style="background:#0c120e;border:1px solid rgba(94,234,166,.13);border-radius:6px;padding:14px 16px">
+<div style="font-size:11px;letter-spacing:.2em;color:#34d399;text-transform:uppercase;margin-bottom:12px">the bus — specs/ → queue/ → claimed/ → done/</div>
+<div style="display:flex;gap:9px;align-items:center;overflow-x:auto;padding-bottom:4px">
+<div style="flex:none;text-align:center;background:#101812;border:1px solid rgba(94,234,166,.13);border-radius:6px;padding:10px 14px"><div style="font-size:10px;letter-spacing:.14em;color:#93a89c">SPECS</div><div style="font-size:24px">50</div><div style="font-size:10px;color:#93a89c">by Fable</div></div>
+<span style="color:#1d8a63;flex:none">──▶</span>
+<div style="flex:none;text-align:center"><div style="background:#101812;border:1px solid rgba(94,234,166,.13);border-radius:6px;padding:10px 14px"><div style="font-size:10px;letter-spacing:.14em;color:#93a89c">QUEUE</div><div style="font-size:24px">{{cQueued}}</div><div style="font-size:10px;color:#7dd3fc">▂▂▃ trend</div></div><div style="margin-top:5px;font-size:10px;color:{{valveC}};border:1px dashed {{valveC}};border-radius:4px;padding:1px 8px;cursor:pointer" onClick="{{pauseAll}}">{{valveTxt}}</div></div>
+<div style="flex:none;text-align:center;color:#1d8a63"><div style="font-size:9.5px;color:#93a89c;line-height:1.2">atomic<br>rename</div>──▶</div>
+<div style="flex:none;display:flex;flex-direction:column;gap:6px">
+<sc-for list="{{ laneNodes }}" as="ln" hint-placeholder-count="4">
+<div style="display:flex;gap:10px;align-items:center;background:#101812;border:1px solid rgba(94,234,166,.13);border-left:3px solid {{ln.c}};border-radius:6px;padding:7px 12px;min-width:330px">
+<span style="color:{{ln.c}};width:80px">{{ln.name}}</span>
+<span style="color:#e6f1ea;width:34px">×{{ln.n}}</span>
+<span style="color:#7dd3fc;font-size:11px;width:44px">{{ln.pulse}}</span>
+<span style="color:#93a89c;font-size:11px;width:70px">${{ln.burn}}/min</span>
+<span style="color:{{ln.xc}};font-size:11px">{{ln.extra}}</span>
+</div>
+</sc-for>
+</div>
+<span style="color:#1d8a63;flex:none">──▶</span>
+<div style="flex:none;text-align:center;background:#101812;border:1px dashed rgba(94,234,166,.28);border-radius:6px;padding:10px 14px"><div style="font-size:10px;letter-spacing:.14em;color:#93a89c">HANDOFF</div><div style="font-size:13px">res-*.txt</div><div style="font-size:10px;color:#93a89c">never scraped</div></div>
+<span style="color:#1d8a63;flex:none">──▶</span>
+<div style="flex:none;text-align:center;background:#101812;border:1px solid #1d8a63;border-radius:6px;padding:10px 14px"><div style="font-size:10px;letter-spacing:.14em;color:#93a89c">DONE</div><div style="font-size:24px;color:#34d399">{{cDone}}</div><div style="font-size:10px;color:#93a89c">newest {{newestDone}}</div></div>
+<span style="color:#1d8a63;flex:none">──▶</span>
+<div style="flex:none;text-align:center;background:#101812;border:1px solid rgba(224,179,74,.4);border-radius:6px;padding:10px 14px"><div style="font-size:10px;letter-spacing:.14em;color:#93a89c">GATE</div><div style="font-size:12px">done+parked ≥ live</div><div style="font-size:11px;color:#e0b34a">{{gateTxt}} — holding</div></div>
+<span style="color:#1d8a63;flex:none">──▶</span>
+<div style="flex:none;text-align:center;background:repeating-linear-gradient(45deg,#101812 0 5px,rgba(94,234,166,.06) 5px 10px);border:1px solid rgba(94,234,166,.13);border-radius:6px;padding:10px 14px"><div style="font-size:10px;letter-spacing:.14em;color:#93a89c">VERIFY</div><div style="font-size:12px">C→X X→G G→Z Z→C</div><div style="font-size:10px;color:#93a89c">judge ≠ executor</div></div>
+<span style="color:#1d8a63;flex:none">──▶</span>
+<div style="flex:none;text-align:center;background:#101812;border:1px solid rgba(94,234,166,.13);border-radius:6px;padding:10px 14px"><div style="font-size:10px;letter-spacing:.14em;color:#93a89c">SYNTH</div><div style="font-size:13px">Fable</div><div style="font-size:10px;color:#93a89c">adjudicates</div></div>
+</div>
+<div style="display:flex;gap:10px;margin-top:8px;margin-left:150px;font-size:11px">
+<span style="border:1px dashed rgba(224,179,74,.5);border-radius:4px;padding:2px 10px;color:#e0b34a;white-space:nowrap">▣ PARKED {{cParked}} (lane caps)</span>
+<span style="border:1px dashed rgba(147,168,156,.4);border-radius:4px;padding:2px 10px;color:#93a89c;white-space:nowrap">⊘ CANCELLED {{cCancelled}}</span>
+<span style="border:1px dashed rgba(147,168,156,.4);border-radius:4px;padding:2px 10px;color:#93a89c;white-space:nowrap">↻ reaper requeues dead leases</span>
+</div>
+</div>
+<div style="display:flex;gap:16px">
+<div style="flex:1;background:#0c120e;border:1px solid rgba(94,234,166,.13);border-radius:6px;padding:14px 16px">
+<div style="font-size:11px;letter-spacing:.2em;color:#34d399;text-transform:uppercase;margin-bottom:10px">all 50 agents · age since last event</div>
+<div style="display:flex;flex-wrap:wrap;gap:4px">
+<sc-for list="{{ heat }}" as="h" hint-placeholder-count="20">
+<span onClick="{{h.pick}}" title="{{h.t}}" style="width:17px;height:17px;border-radius:3px;background:{{h.bg}};border:1px solid {{h.bd}};cursor:pointer" style-hover="transform:scale(1.25)"></span>
+</sc-for>
+</div>
+<div style="color:#93a89c;font-size:10.5px;margin-top:8px"><span style="color:#34d399">■ fresh</span> → <span style="color:#e0b34a">■ aging</span> → <span style="color:#f97066">■ stuck</span> · ■ done(dim) · □ queued — click a cell to inspect</div>
+</div>
+<div style="flex:none;width:420px;background:#0c120e;border:1px solid rgba(94,234,166,.13);border-radius:6px;padding:14px 16px">
+<div style="font-size:11px;letter-spacing:.2em;color:#34d399;text-transform:uppercase;margin-bottom:10px">burn · $/min</div>
+<div style="display:flex;align-items:flex-end;gap:2px;height:52px">
+<sc-for list="{{ burnBars }}" as="b" hint-placeholder-count="10"><div style="flex:1;height:{{b.h}}%;background:{{b.c}};border-radius:1px 1px 0 0"></div></sc-for>
+</div>
+<div style="display:flex;justify-content:space-between;color:#93a89c;font-size:10.5px;margin-top:5px"><span>13:40</span><span style="color:#f97066">spike = retry storm b-23</span><span>now</span></div>
+</div>
+</div>
+</main>
+</sc-if>
+
+<sc-if value="{{isGrid}}" hint-placeholder-val="{{ false }}">
+<main data-screen-label="Mission Control" style="flex:1;min-height:0;display:flex;overflow:hidden">
+<aside style="flex:none;width:262px;border-right:1px solid rgba(94,234,166,.13);padding:14px;display:flex;flex-direction:column;gap:9px;overflow-y:auto">
+<div style="font-size:11px;letter-spacing:.2em;color:{{verdictC}};text-transform:uppercase">needs attention ({{alertN}})</div>
+<sc-for list="{{ alerts }}" as="al" hint-placeholder-count="3">
+<div style="background:#0c120e;border:1px solid {{al.bc}};border-radius:6px;padding:10px 12px">
+<div style="font-size:14px">{{al.id}} <span style="color:{{al.c}};font-size:12px">{{al.title}}</span></div>
+<div style="color:#93a89c;font-size:11px;margin:3px 0 8px">{{al.sub}}</div>
+<div style="display:flex;gap:5px;flex-wrap:wrap"><button onClick="{{al.act}}" style="font-family:inherit;font-size:10.5px;white-space:nowrap;background:#101812;color:{{al.c}};border:1px solid {{al.bc}};border-radius:4px;padding:3px 9px;cursor:pointer">{{al.verb}}</button><button onClick="{{al.open}}" style="font-family:inherit;font-size:10.5px;white-space:nowrap;background:none;color:#93a89c;border:1px solid rgba(94,234,166,.13);border-radius:4px;padding:3px 9px;cursor:pointer" style-hover="color:#e6f1ea">inspect</button></div>
+</div>
+</sc-for>
+<sc-if value="{{noAlerts}}"><div style="border:1px dashed rgba(94,234,166,.28);border-radius:6px;padding:14px;color:#93a89c;font-size:12px">nothing needs you.</div></sc-if>
+<div style="margin-top:auto;color:#93a89c;font-size:10.5px;line-height:1.6;border-top:1px solid rgba(94,234,166,.13);padding-top:10px">alert rules — age &gt; LEASE_MIN/2 · retries ≥ 2 · budget &gt; 80% · queue starved while a lane idles. Thresholds from swarm.conf.</div>
+</aside>
+<div style="flex:1;min-width:0;overflow-y:auto;padding:14px 16px">
+<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px"><span style="font-size:11px;letter-spacing:.2em;color:#34d399;text-transform:uppercase">agents · trouble first, done sinks</span><span style="color:#93a89c;font-size:11px">border = state · number = age since last event · <span style="color:#7dd3fc">▂▅▃</span> = tool-call pulse</span></div>
+<div style="display:flex;gap:6px;margin-bottom:10px">
+<sc-for list="{{ filters }}" as="f" hint-placeholder-count="5"><span onClick="{{f.go}}" style="font-size:10.5px;letter-spacing:.05em;white-space:nowrap;padding:2px 11px;border-radius:10px;border:1px solid {{f.bc}};color:{{f.c}};background:{{f.bg}};cursor:pointer" style-hover="border-color:#34d399">{{f.label}}</span></sc-for>
+</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:7px">
+<sc-for list="{{ agents }}" as="a" hint-placeholder-count="16">
+<div onClick="{{a.pick}}" style="background:#0c120e;border:1px solid {{a.bc}};border-radius:6px;padding:7px 9px;opacity:{{a.op}};cursor:pointer;box-shadow:{{a.ring}}" style-hover="border-color:#34d399">
+<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12.5px">{{a.id}}</span><span style="font-size:9.5px;color:{{a.lc}};border:1px solid {{a.lc}};border-radius:3px;padding:0 4px">{{a.lane}}</span></div>
+<div style="color:#7dd3fc;font-size:10px;letter-spacing:1px;margin:3px 0 1px">{{a.pulse}}</div>
+<div style="color:#93a89c;font-size:9.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:3px">{{a.act}}</div>
+<div style="display:flex;justify-content:space-between;font-size:10.5px"><span style="color:{{a.gc}}">{{a.glyph}} {{a.age}}</span><span style="color:#93a89c">{{a.tok}}</span></div>
+</div>
+</sc-for>
+</div>
+</div>
+</main>
+</sc-if>
+
+<sc-if value="{{isFlight}}" hint-placeholder-val="{{ false }}">
+<main data-screen-label="Flightpaths" style="flex:1;min-height:0;overflow-y:auto;padding:14px 18px">
+<div style="display:flex;align-items:baseline;gap:16px;margin-bottom:8px">
+<span style="font-size:11px;letter-spacing:.2em;color:#34d399;text-transform:uppercase">flightpaths · a flat line is a stuck agent</span>
+<button onClick="{{toggleSort}}" style="font-family:inherit;font-size:11px;background:#101812;color:#e6f1ea;border:1px solid rgba(94,234,166,.28);border-radius:4px;padding:3px 10px;cursor:pointer" style-hover="border-color:#34d399">sort: {{sortLabel}} ⇅</button>
+<span style="color:#93a89c;font-size:11px">solid = executing · dashed = queued · <span style="color:#e0b34a">amber dash = silent</span> · bar tint = lane · <span style="color:#c084fc">hatch = verify</span> · dots = <span style="color:#7dd3fc">tool</span>/<span style="color:#f97066">error</span> · click row → inspect</span>
+</div>
+<div style="position:relative;height:16px;margin-left:104px;margin-right:58px;color:#93a89c;font-size:10px">
+<sc-for list="{{ ticks }}" as="tk" hint-placeholder-count="5"><span style="position:absolute;left:{{tk.l}}%">{{tk.t}}</span></sc-for>
+<span style="position:absolute;left:86%;color:#f97066">NOW ▾</span>
+</div>
+<div style="position:relative">
+<div style="position:absolute;top:0;bottom:0;left:calc(104px + (100% - 162px) * 0.86);border-left:1px dashed #f97066;z-index:3"></div>
+<sc-for list="{{ tlRows }}" as="r" hint-placeholder-count="10">
+<div onClick="{{r.pick}}" style="display:flex;align-items:center;height:22px;background:{{r.rbg}};border-radius:3px;cursor:pointer" style-hover="background:#101812">
+<span style="flex:none;width:104px;font-size:11px;padding-left:4px">{{r.id}} <span style="color:{{r.lc}}">{{r.lane}}</span></span>
+<div style="flex:1;position:relative;height:18px;border-bottom:1px solid rgba(94,234,166,.07)">
+<sc-for list="{{ r.segs }}" as="s" hint-placeholder-count="2"><div style="position:absolute;left:{{s.l}}%;width:{{s.w}}%;top:4px;height:10px;border-radius:2px;background:{{s.bg}};border:1px {{s.bs}} {{s.bd}}"></div></sc-for>
+<sc-for list="{{ r.dots }}" as="d" hint-placeholder-count="0"><span style="position:absolute;left:{{d.l}}%;top:6.5px;width:5.5px;height:5.5px;border-radius:50%;background:{{d.c}}"></span></sc-for>
+</div>
+<span style="flex:none;width:58px;text-align:right;font-size:11px;color:{{r.ac}};padding-right:4px">{{r.age}}</span>
+</div>
+</sc-for>
+<div onClick="{{toggleDone}}" style="display:flex;align-items:center;height:24px;color:#93a89c;font-size:11px;cursor:pointer;margin-left:104px" style-hover="color:#e6f1ea">{{doneToggleTxt}}</div>
+</div>
+<div style="display:flex;gap:20px;margin:14px 0 4px;margin-left:104px;margin-right:58px">
+<div style="flex:1"><div style="color:#93a89c;font-size:10.5px;margin-bottom:4px">$ burn (cumulative) — budget line $10</div><div style="display:flex;align-items:flex-end;gap:1px;height:40px;border-bottom:1px solid rgba(94,234,166,.28)"><sc-for list="{{ cumBars }}" as="b" hint-placeholder-count="10"><div style="flex:1;height:{{b.h}}%;background:rgba(52,211,153,.35)"></div></sc-for></div></div>
+<div style="flex:1"><div style="color:#93a89c;font-size:10.5px;margin-bottom:4px">events / min — <span style="color:#f97066">spike = retry storm</span></div><div style="display:flex;align-items:flex-end;gap:1px;height:40px;border-bottom:1px solid rgba(94,234,166,.28)"><sc-for list="{{ evtBars }}" as="b" hint-placeholder-count="10"><div style="flex:1;height:{{b.h}}%;background:{{b.c}}"></div></sc-for></div></div>
+</div>
+</main>
+</sc-if>
+
+<sc-if value="{{hasSel}}" hint-placeholder-val="{{ false }}">
+<aside data-screen-label="Agent drawer" style="position:fixed;top:96px;right:0;bottom:0;width:352px;z-index:40;background:#0c120e;border-left:1px solid rgba(94,234,166,.28);display:flex;flex-direction:column;box-shadow:-14px 0 34px rgba(0,0,0,.5)">
+<div style="flex:none;display:flex;align-items:center;gap:9px;padding:11px 14px;border-bottom:1px solid rgba(94,234,166,.13)">
+<span style="font-size:15px">{{selId}}</span>
+<span style="font-size:10px;color:{{selLc}};border:1px solid {{selLc}};border-radius:3px;padding:0 5px">{{selLaneName}}</span>
+<span style="color:#93a89c;font-size:11px">{{selMeta}}</span>
+<span onClick="{{closeSel}}" style="margin-left:auto;color:#93a89c;cursor:pointer;padding:2px 6px" style-hover="color:#e6f1ea">✕</span>
+</div>
+<sc-if value="{{selAlarm}}"><div style="flex:none;padding:10px 14px;background:rgba(224,179,74,.08);border-bottom:1px solid rgba(224,179,74,.4)"><div style="color:#e0b34a;font-size:17px">last event {{selAge}} ago</div><div style="color:#93a89c;font-size:10.5px;margin-top:2px">lease expires in {{selLease}} → reaper requeues</div></div></sc-if>
+<div style="flex:none;display:flex;gap:5px;padding:9px 14px;border-bottom:1px solid rgba(94,234,166,.13)">
+<sc-for list="{{ dtabs }}" as="dt" hint-placeholder-count="4"><span onClick="{{dt.go}}" style="font-size:10.5px;letter-spacing:.05em;padding:2px 9px;border-radius:9px;border:1px solid {{dt.bc}};color:{{dt.c}};background:{{dt.bg}};cursor:pointer">{{dt.label}}</span></sc-for>
+</div>
+<div style="flex:1;min-height:0;overflow-y:auto;padding:8px 12px;background:#050807">
+<sc-if value="{{dtEvents}}" hint-placeholder-val="{{ true }}">
+<sc-for list="{{ selEvents }}" as="e" hint-placeholder-count="6">
+<div style="display:flex;gap:8px;align-items:baseline;padding:2.5px 4px;font-size:11.5px;border-radius:3px" style-hover="background:#101812">
+<span style="flex:none;width:56px;color:#93a89c">{{e.t}}</span>
+<span style="flex:none;padding:0 6px;border-radius:3px;font-size:10px;background:{{e.bg}};color:{{e.c}}">{{e.badge}}</span>
+<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:{{e.tc}}">{{e.txt}}</span>
+</div>
+</sc-for>
+</sc-if>
+<sc-if value="{{dtOther}}"><div style="color:#93a89c;font-size:11.5px;white-space:pre-wrap;padding:6px 4px">{{dtBody}}</div></sc-if>
+</div>
+<div style="flex:none;display:flex;gap:7px;padding:11px 14px;border-top:1px solid rgba(94,234,166,.28)">
+<button onClick="{{ctlNudge}}" style="font-family:inherit;flex:1;font-size:11px;background:#34d399;color:#052e1e;border:none;border-radius:4px;padding:6px 0;cursor:pointer" style-hover="background:#4ae0a8">NUDGE</button>
+<button onClick="{{ctlPause}}" style="font-family:inherit;flex:1;font-size:11px;background:#101812;color:#e6f1ea;border:1px solid rgba(94,234,166,.28);border-radius:4px;padding:6px 0;cursor:pointer" style-hover="border-color:#34d399">PAUSE</button>
+<button onClick="{{ctlKill}}" style="font-family:inherit;flex:1;font-size:11px;background:#101812;color:#e0b34a;border:1px solid rgba(224,179,74,.4);border-radius:4px;padding:6px 0;cursor:pointer" style-hover="background:rgba(224,179,74,.1)">KILL</button>
+<button onClick="{{ctlCancel}}" style="font-family:inherit;flex:1;font-size:11px;background:#101812;color:#f97066;border:1px solid rgba(249,112,102,.4);border-radius:4px;padding:6px 0;cursor:pointer" style-hover="background:rgba(249,112,102,.1)">CANCEL</button>
+</div>
+<div style="flex:none;color:#93a89c;font-size:9.5px;padding:0 14px 10px">controls → POST /api/ctl → swarm-ctl · bus-only, never touches the worker pane · NUDGE = kill + requeue with hint</div>
+</aside>
+</sc-if>
+
+<sc-if value="{{hasToast}}" hint-placeholder-val="{{ false }}">
+<div style="position:fixed;right:18px;bottom:18px;z-index:60;background:#101812;border:1px solid #34d399;border-radius:6px;padding:9px 14px;font-size:11.5px;color:#e6f1ea;box-shadow:0 8px 28px rgba(0,0,0,.6);animation:rise .18s ease-out"><span style="color:#34d399">$</span> {{toast}}</div>
+</sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;view&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;ops&quot;,&quot;grid&quot;,&quot;flight&quot;],&quot;default&quot;:&quot;ops&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Cockpit&quot;},&quot;live&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Cockpit&quot;},&quot;scenario&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;3 alerts&quot;,&quot;all clear&quot;],&quot;default&quot;:&quot;3 alerts&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Cockpit&quot;}}">
+class Component extends DCLogic {
+  state = { view: null, sel: null, dtab: 'events', toast: '', tick: 0, paused: false, tsort: 'quiet', showDone: false, filter: 'all' };
+  componentDidMount(){
+    this._iv();
+    this._kd = (e)=>{
+      if(e.key==='1'||e.key==='2'||e.key==='3') this.setState({view:['ops','grid','flight'][+e.key-1]});
+      else if(e.key==='Escape') this.setState({sel:null});
+    };
+    window.addEventListener('keydown', this._kd);
+  }
+  componentDidUpdate(){ this._iv(); }
+  componentWillUnmount(){ clearInterval(this._t); window.removeEventListener('keydown', this._kd); }
+  _hexA(h,a){ const n = parseInt(h.slice(1),16); return 'rgba('+(n>>16)+','+((n>>8)&255)+','+(n&255)+','+a+')'; }
+  _iv(){
+    const on = this.props.live !== false;
+    if(on && !this._t) this._t = setInterval(()=>this.setState(s=>({tick:s.tick+1})), 2000);
+    if(!on && this._t){ clearInterval(this._t); this._t = null; }
+  }
+  _toast(msg){
+    this.setState({toast: msg});
+    clearTimeout(this._tt);
+    this._tt = setTimeout(()=>this.setState({toast:''}), 2600);
+  }
+  _ctl(verb, id){ this._toast('swarm-ctl ' + verb + (id ? ' ' + id : '') + '  \u00b7  POST /api/ctl 202'); }
+  _rnd(i,n){ const x = Math.sin(i*127.1+n*311.7)*43758.5453; return x - Math.floor(x); }
+  _base(){
+    const scen = this.props.scenario || '3 alerts';
+    if(this._bs && this._bsk === scen) return this._bs;
+    const clear = scen === 'all clear';
+    const L = { C:{name:'claude', c:'#7dd3fc'}, X:{name:'codex', c:'#c084fc'}, G:{name:'gemini', c:'#e0b34a'}, Z:{name:'glm', c:'#34d399'} };
+    const ACT = {
+      C:['Edit src/api/routes.ts','Bash: npm test','Write .bus/res file','Read src/swarm-lib.sh','Grep "claim_one" src/'],
+      X:['apply_patch lib/db.ts','bash: bats tests/core.bats','planning fix for gate math','read tests/cockpit.bats'],
+      G:['web_search "ext4 rename atomicity"','fetch docs.docker.com/engine','reading 12 sources\u2026','summarizing findings'],
+      Z:['bash: grep -r PAUSE .bus','drafting summary\u2026','Edit worktree/loop.md','bash: jq .usage run.jsonl']
+    };
+    const keys = ['C','X','G','Z'];
+    const agents = [];
+    for(let i=1;i<=50;i++){
+      const k = keys[i%4], r = this._rnd(i,1);
+      let st = 'run';
+      if(!clear){
+        if(i===17) st='stale'; else if(i===33) st='stale2'; else if(i===23) st='err';
+        else if(i===41||i===47) st='park';
+        else if(r<0.36) st='done'; else if([44,46,48,49,50].includes(i)) st='q';
+      } else {
+        if(r<0.40) st='done'; else if([48,49,50].includes(i)) st='q';
+      }
+      const acts = ACT[k];
+      agents.push({ i, id:'b-'+String(i).padStart(2,'0'), k, lane:L[k].name, lc:L[k].c, st,
+        act: acts[Math.floor(this._rnd(i,4)*acts.length)],
+        maxAge: 8 + Math.floor(this._rnd(i,5)*55),
+        tokBase: 6 + this._rnd(i,9)*80 });
+    }
+    this._bs = { agents, L, clear }; this._bsk = scen;
+    return this._bs;
+  }
+  renderVals(){
+    const { agents, clear } = this._base();
+    const t = this.state.tick, sel = this.state.sel;
+    const B = { green:['rgba(52,211,153,.15)','#34d399'], red:['rgba(249,112,102,.18)','#f97066'], blue:['rgba(125,211,252,.18)','#7dd3fc'], dim:['rgba(147,168,156,.14)','#93a89c'] };
+    const blocks = ['\u2581','\u2582','\u2583','\u2584','\u2585','\u2586','\u2587'];
+    const fmtAge = (s)=> s<60 ? s+'s' : Math.floor(s/60)+'m';
+    const clk = (off)=>{ const b = 50592 + t*2 + off; const h=Math.floor(b/3600), m=Math.floor(b%3600/60), s=b%60; return [h,m,s].map(n=>String(n).padStart(2,'0')).join(':'); };
+    const ageOf = (a)=> a.st==='stale' ? 852+t*2 : a.st==='stale2' ? 540+t*2 : a.st==='err' ? 130+t*2 : (Math.floor(this._rnd(a.i,2)*40) + t*2) % a.maxAge + 1;
+    const pulseOf = (a)=>{ const low = a.st!=='run'; if(a.st==='stale'||a.st==='stale2') return '\u2581\u2581\u2581\u2581\u2581\u2581'; let p=''; for(let k=0;k<6;k++) p += blocks[Math.floor(this._rnd(a.i, k+3+(low?0:t))*(low?2:7))]; return p; };
+
+    const view = this.state.view || this.props.view || 'ops';
+    const go = (v)=>()=>this.setState({view:v});
+    const tabs = [ ['ops','OPS WALL'], ['grid','MISSION CONTROL'], ['flight','FLIGHTPATHS'] ].map(([k,label])=>({
+      label, go: go(k), tc: view===k ? '#34d399' : '#93a89c', bb: view===k ? '#34d399' : 'transparent' }));
+
+    const by = (st)=>agents.filter(a=>a.st===st);
+    const cDone = by('done').length, cQueued = by('q').length, cErr = by('err').length,
+      cStale = by('stale').length + by('stale2').length, cParked = by('park').length;
+    const cRunning = agents.length - cDone - cQueued - cParked - (clear?0:1);
+    const cClaimed = agents.length - cDone - cQueued - cParked;
+    const spent = 4.2 + t*0.014;
+    const gateN = cDone + cParked;
+
+    const pick = (id)=>()=>this.setState({sel:id, dtab:'events'});
+    const mkAlerts = ()=> clear ? [] : [
+      { id:'b-23', title:'\u2715 error \u00d73', sub:'glm ETIMEDOUT \u00b7 last chain retry running on codex', c:'#f97066', bc:'rgba(249,112,102,.5)', verb:'KILL + CANCEL', act:()=>this._ctl('kill --cancel','b-23'), open:pick('b-23') },
+      { id:'b-17', title:'silent '+fmtAge(852+t*2), sub:'codex \u00b7 claimed, zero events \u00b7 lease dies in '+fmtAge(Math.max(1200-852-t*2, 0)), c:'#e0b34a', bc:'rgba(224,179,74,.5)', verb:'NUDGE NOW', act:()=>this._ctl('nudge','b-17'), open:pick('b-17') },
+      { id:'BUDGET', title:Math.round(spent*10)+'% burned', sub:'$'+spent.toFixed(2)+' of $10 \u00b7 on pace to cap before gate', c:'#e0b34a', bc:'rgba(224,179,74,.5)', verb:'PAUSE QUEUE', act:()=>this._ctl('pause'), open:go('flight') }
+    ];
+    const alerts = mkAlerts();
+
+    const stTile = (a)=>{
+      const m = {
+        run:{ bc:'rgba(94,234,166,.2)', op:'1', glyph:'\u25cf', gc:'#34d399' },
+        q:{ bc:'rgba(94,234,166,.13)', op:'0.5', glyph:'\u25cc', gc:'#93a89c' },
+        done:{ bc:'rgba(94,234,166,.1)', op:'0.4', glyph:'\u2713', gc:'#1d8a63' },
+        stale:{ bc:'#e0b34a', op:'1', glyph:'\u26a0', gc:'#e0b34a' },
+        stale2:{ bc:'#e0b34a', op:'1', glyph:'\u26a0', gc:'#e0b34a' },
+        err:{ bc:'#f97066', op:'1', glyph:'\u2715', gc:'#f97066' },
+        park:{ bc:'rgba(224,179,74,.5)', op:'0.75', glyph:'\u25a3', gc:'#e0b34a' } }[a.st];
+      const age = ageOf(a);
+      return { id:a.id, lane:a.lane, lc:a.lc, pulse:pulseOf(a), tok:(a.tokBase + t*0.4).toFixed(0)+'k',
+        act: a.st==='run' ? a.act : ({ q:'waiting for claim', done:'handoff written \u2713', park:'parked (.limited)', err:'chain retry \u2192 codex', stale:'no events \u2014 nudge?', stale2:'no events \u2014 nudge?' })[a.st],
+        age: a.st==='done' ? '' : a.st==='q' ? 'queued' : a.st==='park' ? 'parked' : fmtAge(age),
+        pick: pick(a.id), ring: sel===a.id ? '0 0 0 2px #34d399' : 'none', ...m };
+    };
+    const rank = { err:0, stale:1, stale2:2, park:3, run:4, q:5, done:6 };
+    const filt = this.state.filter;
+    const match = (a)=> filt==='all' ? true
+      : filt==='attention' ? ['err','stale','stale2','park'].includes(a.st)
+      : filt==='active' ? a.st==='run'
+      : filt==='queued' ? a.st==='q'
+      : a.st==='done';
+    const tiles = agents.slice().sort((x,y)=> rank[x.st]-rank[y.st] || x.i-y.i).filter(match).map(stTile);
+    const runN = agents.filter(a=>a.st==='run').length;
+    const filters = [ ['all','ALL 50'], ['attention','ATTN '+(cErr+cStale+cParked)], ['active','RUN '+runN], ['queued','QUEUED '+cQueued], ['done','DONE '+cDone] ].map(([k,label])=>({
+      label, go:()=>this.setState({filter:k}),
+      c: filt===k ? '#052e1e' : '#93a89c', bg: filt===k ? '#34d399' : 'transparent', bc: filt===k ? '#34d399' : 'rgba(94,234,166,.2)' }));
+
+    const heat = agents.map(a=>{
+      const age = ageOf(a);
+      let bg = '#34d399', bd = 'transparent';
+      if(a.st==='done'){ bg='#101812'; bd='rgba(94,234,166,.13)'; }
+      else if(a.st==='q'){ bg='transparent'; bd='rgba(147,168,156,.4)'; }
+      else if(a.st==='err'){ bg='#f97066'; }
+      else if(a.st==='stale'||a.st==='stale2'){ bg='#e0b34a'; }
+      else if(a.st==='park'){ bg='rgba(224,179,74,.35)'; }
+      else if(age>30){ bg='#1d8a63'; }
+      return { t:a.id+' \u00b7 '+(a.st==='run'?fmtAge(age)+' \u00b7 '+a.act:a.st), bg, bd, pick: pick(a.id) };
+    });
+
+    const laneNodes = ['C','X','G','Z'].map(k=>{
+      const g = agents.filter(a=>a.k===k && (a.st==='run'||a.st==='stale'||a.st==='stale2'||a.st==='err'));
+      const info = { C:['claude','0.18','',''], X:['codex','0.13', clear?'':'\u26a0 b-17 silent', '#e0b34a'], G:['gemini','0.07','read-only lane','#93a89c'], Z:['glm','0.04', clear?'':'.limited \u00b7 2 parked', '#f97066'] }[k];
+      return { name:info[0], c:{C:'#7dd3fc',X:'#c084fc',G:'#e0b34a',Z:'#34d399'}[k], n:g.length, burn:info[1],
+        pulse: pulseOf({i:k.charCodeAt(0), st:'run'}), extra: info[2], xc: info[3] || '#93a89c' };
+    });
+
+    const win = 1500 + t*2;
+    const segsOf = (a)=>{
+      const solid = [this._hexA(a.lc,.20),'solid',this._hexA(a.lc,.55)];
+      const qs = this._rnd(a.i,6)*8, qw = 2+this._rnd(a.i,7)*4, xs = qs+qw;
+      const seg = (l,w,[bg,bs,bd])=>({ l:l.toFixed(1), w:Math.max(w,0.4).toFixed(1), bg, bs, bd });
+      const dash = ['transparent','dashed','rgba(147,168,156,.5)'];
+      const hatch = ['repeating-linear-gradient(45deg,transparent 0 4px,rgba(94,234,166,.25) 4px 8px)','solid','rgba(94,234,166,.4)'];
+      const S = [seg(qs,qw,dash)], D = [];
+      const dot = (l,c)=>D.push({l:l.toFixed(1), c});
+      if(a.st==='done'){ const xe = 18+this._rnd(a.i,8)*52; S.push(seg(xs, xe-xs, solid)); S.push(seg(xe+2, 8, hatch)); dot(xs+(xe-xs)*0.4,'#7dd3fc'); }
+      else if(a.st==='stale'||a.st==='stale2'){ const cut = a.st==='stale'?42:56; S.push(seg(xs,cut-xs,solid)); S.push(seg(cut,86-cut,['transparent','dashed','#e0b34a'])); dot(xs+6,'#7dd3fc'); dot(cut-2,'#f97066'); }
+      else if(a.st==='err'){ S.push(seg(9,21,solid)); dot(24,'#f97066'); dot(27,'#f97066'); dot(30,'#f97066'); S.push(seg(33,15,['transparent','dashed','#f97066'])); S.push(seg(50,36,solid)); dot(62,'#7dd3fc'); dot(76,'#7dd3fc'); }
+      else if(a.st==='park'){ S.push(seg(xs,7,['rgba(224,179,74,.18)','dashed','#e0b34a'])); }
+      else if(a.st==='q'){ S.length=0; S.push(seg(qs,86-qs,dash)); }
+      else { S.push(seg(xs,86-xs,solid)); const n = 2+Math.floor(this._rnd(a.i,10)*4); for(let d=0; d<n; d++) dot(xs+(86-xs)*this._rnd(a.i,11+d),'#7dd3fc'); }
+      return [S,D];
+    };
+    const rowOf = (a)=>{
+      const [segs,dots] = segsOf(a), age = ageOf(a);
+      const warn = a.st==='stale'||a.st==='stale2';
+      return { id:a.id, lane:a.k, lc:a.lc, segs, dots, pick:pick(a.id), _age: a.st==='q'?-1:age,
+        age: a.st==='done' ? '\u2713' : a.st==='q' ? '\u2014' : a.st==='park' ? 'parked' : fmtAge(age),
+        ac: warn ? '#e0b34a' : a.st==='err' ? '#f97066' : a.st==='done' ? '#1d8a63' : '#93a89c',
+        rbg: warn ? 'rgba(224,179,74,.07)' : a.st==='err' ? 'rgba(249,112,102,.06)' : 'transparent' };
+    };
+    let live = agents.filter(a=>a.st!=='done');
+    if(this.state.tsort==='quiet') live = live.slice().sort((x,y)=> rank[x.st]-rank[y.st] || ageOf(y)-ageOf(x));
+    let tlRows = live.map(rowOf);
+    const vRows = (clear?[['v-01','X\u22a2C',55,15,true],['v-02','G\u22a2X',60,26,false]]:[['v-01','X\u22a2C',55,15,true],['v-02','G\u22a2X',60,26,false],['v-03','C\u22a2G',62,24,false],['v-04','Z\u22a2X',66,20,false]]).map(([id,lane,l,w,done],ix)=>({
+      id, lane, lc:'#c084fc', segs:[{l:String(l),w:String(w),bg:'repeating-linear-gradient(45deg,transparent 0 4px,rgba(192,132,252,.3) 4px 8px)',bs:'solid',bd:'rgba(192,132,252,.5)'}],
+      dots: done?[]:[{l:String(l+w-2),c:'#7dd3fc'}], pick:()=>this._toast('verify branch \u2014 judge \u2260 executor (VERIFY_MAP)'),
+      age: done?'\u2713':(20+ix*11+t*2%30)+'s', ac: done?'#1d8a63':'#93a89c', rbg:'transparent' }));
+    tlRows = tlRows.concat(vRows);
+    if(this.state.showDone) tlRows = tlRows.concat(agents.filter(a=>a.st==='done').map(rowOf));
+
+    const cum = []; for(let i=0;i<40;i++) cum.push({ h: Math.min(6+i*2.3+(i>28?i-28:0), 92).toFixed(0) });
+    const evt = []; for(let i=0;i<40;i++){ const spike = !clear && i===24; evt.push({ h: spike?92:(28+this._rnd(i+3,13)*46).toFixed(0), c: spike?'#f97066':'rgba(125,211,252,.4)' }); }
+
+    const sa = agents.find(a=>a.id===sel);
+    let selVals = {};
+    if(sa){
+      const age = ageOf(sa);
+      const ev = [];
+      const push = (off,badge,cl,txt,tc)=>ev.push({ t: clk(-off), badge, bg:B[cl][0], c:B[cl][1], txt, tc: tc||'#e6f1ea' });
+      const base = (sa.st==='stale'||sa.st==='stale2'||sa.st==='err') ? age : 0;
+      push(base+190,'claim','dim','claimed via atomic rename \u2192 claimed/'+sa.id+'.'+sa.lane,'#93a89c');
+      push(base+160,'tool_use','blue', sa.act);
+      push(base+131,'tool_result','dim','412 lines \u00b7 exit 0','#93a89c');
+      push(base+96,'agent_message','green','"'+(sa.k==='G'?'sources conflict on rename semantics, cross-checking':'tests failing in auth module, patching')+'\u2026"');
+      push(base+60,'tool_use','blue', sa.k==='C' ? 'Bash: npm test -- --filter auth' : sa.act);
+      if(sa.st==='err'){ push(age+32,'error','red','ETIMEDOUT api.z.ai \u00b7 retry 1'); push(age+16,'error','red','ETIMEDOUT api.z.ai \u00b7 retry 2'); push(age,'error','red','ETIMEDOUT \u00b7 MAX_LANE_RETRIES hit \u2192 chain \u2192 codex'); }
+      else if(sa.st==='stale'||sa.st==='stale2'){ push(age,'error','red','stream stalled mid-turn (no close frame)'); ev.push({ t:'', badge:'silence', bg:B.dim[0], c:'#e0b34a', txt:'\u2014 no events for '+fmtAge(age)+' \u2014', tc:'#e0b34a' }); }
+      else if(sa.st==='done'){ push(10,'result','green','handoff written \u2192 .bus/res-'+sa.id+'.txt \u00b7 moved to done/'); }
+      else { push(Math.min(age,50),'tool_result','dim','ok \u00b7 streaming\u2026','#93a89c'); }
+      const dt = this.state.dtab;
+      const bodies = {
+        transcript: 'ASSISTANT \u00b7 '+clk(-96)+'\n\n"I\u2019ll patch the auth token refresh, then re-run the failing bats suite. The gate math in swarm-lib.sh L412 counts parked branches \u2014 verifying that path too."\n\n[ 2 earlier turns \u00b7 scroll ]',
+        handoff: '.bus/res-'+sa.id+'.txt \u00b7 written on finalize\n\u2014\u2014\u2014\nFINDINGS\n1. rename(2) on ext4 is atomic within a mount \u2014 losing claimer gets ENOENT.\n2. Lease reaper must re-check pid liveness before requeue\u2026\n\n(handoff file is the ONLY read surface \u2014 never pane scrape)',
+        spec: '.bus/specs/'+sa.id+'.prompt\n\u2014\u2014\u2014\nInvestigate the completeness gate: done+parked \u2265 live. Produce a patch + bats test. Write findings to the handoff file.\n\nsidecars: '+sa.id+'.lane = '+sa.lane+':default'
+      };
+      selVals = {
+        selId: sa.id, selLc: sa.lc, selLaneName: sa.lane,
+        selMeta: 'claimed '+fmtAge(age+190)+' \u00b7 '+(sa.tokBase+t*0.4).toFixed(0)+'k tok \u00b7 $'+(sa.tokBase*0.007).toFixed(2),
+        selAlarm: sa.st==='stale'||sa.st==='stale2', selAge: fmtAge(age), selLease: fmtAge(Math.max(1200-age,60)),
+        selEvents: ev,
+        dtabs: ['events','transcript','handoff','spec'].map(k=>({ label:k, go:()=>this.setState({dtab:k}),
+          c: dt===k?'#052e1e':'#93a89c', bg: dt===k?'#34d399':'transparent', bc: dt===k?'#34d399':'rgba(94,234,166,.2)' })),
+        dtEvents: dt==='events', dtOther: dt!=='events', dtBody: bodies[dt] || '',
+        ctlNudge:()=>this._ctl('nudge',sa.id), ctlPause:()=>this._ctl('pause',sa.id),
+        ctlKill:()=>this._ctl('kill',sa.id), ctlCancel:()=>this._ctl('cancel',sa.id)
+      };
+    }
+
+    return {
+      tabs, isOps: view==='ops', isGrid: view==='grid', isFlight: view==='flight',
+      pauseAll: ()=>{ this.setState(s=>({paused:!s.paused})); this._ctl(this.state.paused?'resume':'pause'); },
+      pauseLabel: this.state.paused ? '\u25b6 RESUME' : '\u2016 PAUSE ALL',
+      addSpec: ()=>this._ctl('add specs/new-branch.prompt'), abort: ()=>this._toast('abort requires confirm \u2014 kills run.pgid subtree'),
+      cQueued, cClaimed, cDone, cCancelled: clear?0:1, cStale, cErr, cParked, cRunning,
+      hasWarns: cStale+cParked>0, hasErr: cErr>0,
+      gatePct: (gateN/50*100).toFixed(0), gateParkPct: (cParked/50*100).toFixed(0), gateTxt: gateN+'/50',
+      spent: spent.toFixed(2), budPct: Math.min(spent*10,100).toFixed(0), budColor: spent>8?'#f97066':spent>6?'#e0b34a':'#34d399',
+      burnTotal: '0.42', laneBurn: [ {k:'C',v:'0.18',c:'#7dd3fc'}, {k:'X',v:'0.13',c:'#c084fc'}, {k:'G',v:'0.07',c:'#e0b34a'}, {k:'Z',v:'0.04',c:'#34d399'} ],
+      verdictTxt: clear ? 'ALL CLEAR \u2014 '+cRunning+' WORKING' : '\u26a0 '+alerts.length+' NEED ATTENTION',
+      verdictC: clear ? '#34d399' : '#e0b34a', eta: '~18m',
+      alerts, alertN: alerts.length, noAlerts: alerts.length===0,
+      valveTxt: this.state.paused ? '\u2016 PAUSED \u2014 claims blocked' : '\u2016 pause valve', valveC: this.state.paused ? '#e0b34a' : '#93a89c',
+      newestDone: 'b-35 \u00b7 '+fmtAge((12+t*2)%90),
+      laneNodes, heat, burnBars: evt, agents: tiles,
+      ticks: [{l:'0',t:'13:40'},{l:'20',t:'13:45'},{l:'40',t:'13:50'},{l:'60',t:'13:55'},{l:'80',t:'14:00'}],
+      tlRows, cumBars: cum, evtBars: evt,
+      toggleSort: ()=>this.setState(s=>({tsort: s.tsort==='quiet'?'bus order':'quiet'})),
+      sortLabel: this.state.tsort==='quiet' ? 'quietest first' : 'bus order',
+      toggleDone: ()=>this.setState(s=>({showDone:!s.showDone})),
+      doneToggleTxt: (this.state.showDone?'\u25be hide':'\u25b8 show')+' '+cDone+' done branches',
+      hasSel: !!sa, closeSel: ()=>this.setState({sel:null}), ...selVals,
+      hasToast: !!this.state.toast, toast: this.state.toast,
+      filters, isPaused: this.state.paused,
+      elapsed: (()=>{ const el = 1394 + t*2; return Math.floor(el/60)+'m '+String(el%60).padStart(2,'0')+'s'; })()
+    };
+  }
+}
+</script>
+</body>
+</html>

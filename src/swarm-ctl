@@ -1,0 +1,1169 @@
+#!/usr/bin/env bash
+# Bus-only control verbs for /swarm: pause/resume/cancel/add/abort/status/kill/nudge/unpark/
+# pause-worker/resume-worker/heartbeat/watchdog-arm/watchdog-check/watchdog-disarm.
+#
+# Project: unimatrix — multi-model swarm orchestrator driven from Claude Code
+# Module:  src/swarm-ctl
+# Deps:    src/swarm-lib.sh, coreutils, crontab, flock (util-linux), claude (continuation driver)
+# Tested:  tests/swarm-ctl.bats
+#
+# Key responsibilities:
+# - CLI verbs over the file-bus (no daemon, no MCP)
+# - nudge: kill+requeue with optional operator hint (§4.6)
+# - pause-worker / resume-worker: real SIGSTOP/SIGCONT freeze (§4.6b)
+# - add --lane / --write / --files sidecars (§5.3b·7; --files is spec 14 FR-2's deliverable
+#   manifest, publish-time half — trust-boundary refusal of absolute/escaping entries)
+# - heartbeat / watchdog-arm / watchdog-check / watchdog-disarm: spec 11 FR-S1/FR-S2 apex
+#   succession — ORCHESTRATOR liveness signal, the one sanctioned standing-cron exception, and the
+#   flock-guarded stale-apex takeover that seats a bounded continuation driver
+# - report / postmortem / review-stub: spec 12 FR-5 read-only operator surfaces over the speedwars
+#   ledger — per-lane table, run-summary postmortem, and a mechanically-pre-filled run-reviews.md
+#   skeleton (stdout only, never writes)
+#
+# Design constraints:
+# - `kill <id>` reads the worker pid from .bus/pids/<id> (written by swarm-run.sh's _spawn_worker
+#   at spawn time) and kills its whole subtree via kill_subtree — never just the top pid.
+# - A STOPped process ignores TERM: kill/nudge/cancel CONT first when limits/<id>.frozen is set,
+#   and always clear that flag — but only AFTER the claim file has been disposed of (mv/rm), never
+#   before (wave-7 finding 2: clearing frozen first reopens a reap() window on the not-yet-disposed
+#   claim).
+# - claimed/<id>'s worker suffix is <lane>:<model> and may itself contain dots — every claim-glob
+#   site resolves via _claim_of (src/swarm-lib.sh), never a bare claimed/"$id".* glob, which
+#   prefix-matches a dotted id onto the wrong worker's claim (wave-7 finding 1).
+# - `cancel <id>` on a CLAIMED id (pids/<id> present) behaves like `kill --cancel`: TERM the
+#   subtree, drop the pidfile, THEN land the claim in cancelled/ — never just thaw-and-error while
+#   leaving the worker running (live audit finding).
+# - watchdog-check re-checks heartbeat/run-complete/orch-seat state a SECOND time after taking
+#   flock on limits/takeover.lock (spec 11 FR-S2) — the pre-lock check alone would let two racing
+#   cron ticks both walk ORCH_CHAIN before either had seated a lane; a takeover fires at most once
+#   per run. It never spawns more than one continuation driver, and it never promotes past the
+#   first live (non-limited/dead/budget-gated) member of ORCH_CHAIN.
+# - orch-seat is rewritten (atomic same-dir rename, never a `>` truncate) only AFTER
+#   _watchdog_spawn_driver has succeeded — a seat written before a failed spawn would leave a
+#   non-fable seat with no driver, and every later tick would silently no-op on the seat check
+#   (the exact silent-stall class spec 11 forbids). Spawn failure parks loudly, seat stays fable.
+set -euo pipefail
+shopt -s inherit_errexit
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=src/swarm-lib.sh
+source "$SCRIPT_DIR/src/swarm-lib.sh"
+
+BUSDIR="${BUSDIR:-$SCRIPT_DIR/.bus}"
+CONF="${CONF:-$SCRIPT_DIR/swarm.conf}"
+
+usage() {
+  cat >&2 <<'EOF'
+usage: swarm-ctl <verb> [args]
+  pause              block new claims (touch .bus/PAUSE)
+  resume             allow new claims (rm .bus/PAUSE)
+  cancel <id>        pull a spec from specs/ or queue/ into cancelled/
+  add <promptfile> [--lane <lane:model>] [--write <dir>] [--files <listfile>]
+                     cp a new spec into specs/, then mv it to queue/ (optional sidecars)
+  abort              kill the running scheduler's process group
+  status             print gate count + limit flags
+  kill <id> [--cancel]   kill the claimed worker's subtree; requeue (default) or cancel it
+  nudge <id> [hint]  kill (if running) + requeue with optional operator hint
+  unpark <id>... | --all   rm limits/<id>.parked marker(s); --all spares takeover.parked (spec 15)
+  pause-worker <id>  SIGSTOP the worker subtree; mark limits/<id>.frozen
+  resume-worker <id> SIGCONT the worker subtree; clear limits/<id>.frozen
+  heartbeat [busdir]       touch .bus/heartbeat; seed orch-seat "fable" on first call (spec 11)
+  watchdog-arm [busdir]    idempotently install the tagged takeover cron line (spec 11)
+  watchdog-check [busdir]  one poll: no-op, or take over a stale apex (spec 11)
+  watchdog-disarm [busdir] remove this busdir's tagged takeover cron line (spec 11)
+  report [file]      print the speedwars per-lane table (exec src/speedwars-report.sh) (spec 12)
+  postmortem [run]   pretty-print the newest run-summary row, or every row for <run> (spec 12)
+  review-stub [busdir]  print a run-reviews.md skeleton, mechanical fields filled; writes nothing (spec 12)
+EOF
+  exit 1
+}
+
+cmd_pause() { mkdir -p "$BUSDIR"; touch "$BUSDIR/PAUSE"; }
+cmd_resume() { rm -f "$BUSDIR/PAUSE"; }
+
+# _rm_sidecars <id> — drop this id's .lane (FR-2b), .write (FR-15), and .files (spec 14 FR-2)
+# sidecars from BOTH specs/ and queue/. A cancelled/killed spec must not leave its sidecars
+# behind: they sit inert until a later `add` re-creates queue/<id>.prompt, at which point the
+# orphan .lane silently re-pins the new spec, the orphan .write silently re-grants write access to
+# a stale target dir, and the orphan .files silently re-scopes it to a stale manifest.
+_rm_sidecars() {
+  local id="$1"
+  rm -f "$BUSDIR/specs/$id.lane" "$BUSDIR/specs/$id.write" "$BUSDIR/specs/$id.files" \
+        "$BUSDIR/queue/$id.lane" "$BUSDIR/queue/$id.write" "$BUSDIR/queue/$id.files"
+}
+
+# _reset_card_state <busdir> <id> — spec 14 FR-3: clear this id's terminal/failure/freeze/wait
+# state — .parked, .chain-<id>, .retries-<id> (the FR-3 wipe), nudge's own .timedout/.frozen, plus
+# the FR-R6/FR-5 bounded-wait markers .waiting and .waiting-write (spec 14 FR-5 amendment: a stale
+# .waiting-write survives a cancel/park and insta-parks the next re-publish against its OLD mtime —
+# repro'd with a 10-min-old marker + PIN_WAIT_SEC=120 parking at 0s claiming "after 120s"), and
+# .cage-denied (FR-1: a stale one makes feedback_stubs draft a major stub for a card that later
+# succeeded). Shared by cmd_nudge (nudge = run again from the top), cmd_add (re-publishing a
+# previously parked id must not resolve onto an already-exhausted chain walk or a stale wait), and
+# cmd_cancel (a cancelled card must not leave phantom state behind — see cmd_cancel). Every marker
+# in this list is harmless to wipe for an id that never had it; one list beats several that drift.
+_reset_card_state() {
+  local busdir="$1" id="$2"
+  rm -f "$busdir/limits/$id.parked" \
+        "$busdir/limits/.chain-$id" \
+        "$busdir/limits/.retries-$id" \
+        "$busdir/limits/$id.timedout" \
+        "$busdir/limits/$id.frozen" \
+        "$busdir/limits/$id.waiting" \
+        "$busdir/limits/$id.waiting-write" \
+        "$busdir/limits/$id.cage-denied"
+}
+
+# _cont_if_frozen <id> — STOPped processes ignore TERM; CONT first when limits/<id>.frozen is set.
+# Does NOT clear the frozen flag itself (wave-7 finding 2) — callers (kill/nudge/cancel) must keep
+# .frozen set until AFTER they've disposed of the claim file (mv to cancelled/, mv back to
+# queue/, or staged out of claimed/), then clear it themselves. Clearing the flag before the claim
+# is disposed reopens the exact reap() race this ordering exists to close: a reaper tick landing
+# between "unfrozen" and "claim actually gone from claimed/" would requeue a claim whose worker is
+# already being torn down, producing a duplicate execution. rc 0 = was frozen (caller owns
+# clearing it later), rc 1 = was not frozen (nothing to clear).
+_cont_if_frozen() {
+  local id="$1"
+  local pidfile="$BUSDIR/pids/$id"
+  [[ -f "$BUSDIR/limits/$id.frozen" ]] || return 1
+  if [[ -f "$pidfile" ]]; then
+    signal_subtree "$(<"$pidfile")" CONT
+  fi
+  return 0
+}
+
+cmd_cancel() {
+  local id="$1" src claimfile pidfile
+  _cont_if_frozen "$id" || true
+  mkdir -p "$BUSDIR/cancelled"
+
+  # A CLAIMED id (worker running or claimed-but-not-yet-spawned) must behave like `kill --cancel`,
+  # not just thaw-and-error: leaving a live worker running after "cancel" reported success would be
+  # a silent leak. _cont_if_frozen above already CONT'd it if it was frozen; TERM it here too.
+  # exact resolver (finding 1): a glob on claimed/"$id".* prefix-matches a dotted id (id "foo"
+  # would also match claim "foo.bar.claude:opus"), disposing the WRONG worker's claim.
+  claimfile="$(_claim_of "$BUSDIR" "$id")" || claimfile=""
+  if [[ -n "$claimfile" ]]; then
+    pidfile="$BUSDIR/pids/$id"
+    if [[ -f "$pidfile" ]]; then
+      kill_subtree "$(<"$pidfile")" TERM
+      rm -f "$pidfile"
+    fi
+    mv "$claimfile" "$BUSDIR/cancelled/$id.prompt"
+    _rm_sidecars "$id"
+    # _reset_card_state (which clears .frozen among the rest) only AFTER the claim is disposed
+    # above (finding 2 ordering) — cancel must not leave phantom .parked/.waiting/.cage-denied
+    # behind either: a cancelled id with a stale .parked inflates parked_n while shrinking live_n,
+    # which can close the completeness gate (done_n + parked_n >= live_n) early.
+    _reset_card_state "$BUSDIR" "$id"
+    return 0
+  fi
+
+  for src in "$BUSDIR/specs/$id.prompt" "$BUSDIR/queue/$id.prompt"; do
+    if [[ -e "$src" ]]; then
+      mv "$src" "$BUSDIR/cancelled/$id.prompt"
+      _rm_sidecars "$id"
+      _reset_card_state "$BUSDIR" "$id"
+      return 0
+    fi
+  done
+  rm -f "$BUSDIR/limits/$id.frozen"
+  echo "swarm-ctl: no spec '$id' in specs/, queue/, or claimed/" >&2
+  return 1
+}
+
+# _validate_files_manifest <write_dir> <listfile> — spec 14 FR-2 trust boundary: a manifest scopes
+# a write cage, it must never be used to widen one. Refuses (loud, rc 1), nothing written, for:
+# - an entry that is absolute;
+# - an entry that escapes <write_dir> once resolved with realpath -m — the same canonicalization
+#   _try_claim_one's own .write refusal uses (swarm-run.sh), so the two checks can't disagree on
+#   what "escapes" means;
+# - an entry that resolves to an EXISTING DIRECTORY under the target (manifest entries name
+#   deliverable files; the gate/verifier loud-ignore a directory entry at consume time this same
+#   round, so publish is the one loud surface for it) — a not-yet-existing path stays valid, since
+#   a card may create its own deliverable;
+# - a manifest with zero usable entries (blank lines skipped, not counted) — an empty manifest
+#   would scope the write-diff gate to nothing, so the card false-dones on every lane it walks.
+_validate_files_manifest() {
+  local write_dir="$1" listfile="$2" line wcanon canon n=0
+  wcanon="$(realpath -m -- "$write_dir" 2>/dev/null || printf '%s' "$write_dir")"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    if [[ "$line" == /* ]]; then
+      echo "swarm-ctl: add --files: entry '$line' is absolute — refusing (manifest must stay relative to --write)" >&2
+      return 1
+    fi
+    # Fail CLOSED on realpath failure: the literal-path fallback would let "a/../../x" pass the
+    # string-prefix check below (the literal starts with $wcanon/ while resolving outside it).
+    # Same rule as _manifest_roots (swarm-run.sh) — the three manifest validators must agree.
+    canon="$(realpath -m -- "$write_dir/$line" 2>/dev/null || true)"
+    if [[ -z "$canon" || "$canon" != "$wcanon"/* ]]; then
+      echo "swarm-ctl: add --files: entry '$line' escapes the write target '$write_dir' — refusing" >&2
+      return 1
+    fi
+    if [[ -d "$canon" ]]; then
+      echo "swarm-ctl: add --files: entry '$line' resolves to an existing directory — manifest entries must be files, refusing" >&2
+      return 1
+    fi
+    n=$(( n + 1 ))
+  done < "$listfile"
+  if (( n == 0 )); then
+    echo "swarm-ctl: add --files: manifest '$listfile' has no usable entries — refusing (an empty manifest would false-done on every lane)" >&2
+    return 1
+  fi
+}
+
+cmd_add() {
+  local promptfile="" lane="" write_dir="" files_list=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lane)
+        [[ $# -ge 2 ]] || usage
+        lane="$2"
+        shift 2
+        ;;
+      --write)
+        [[ $# -ge 2 ]] || usage
+        write_dir="$2"
+        shift 2
+        ;;
+      --files)
+        [[ $# -ge 2 ]] || usage
+        files_list="$2"
+        shift 2
+        ;;
+      -*)
+        usage
+        ;;
+      *)
+        if [[ -n "$promptfile" ]]; then
+          usage
+        fi
+        promptfile="$1"
+        shift
+        ;;
+    esac
+  done
+  [[ -n "$promptfile" ]] || usage
+  [[ -f "$promptfile" ]] || { echo "swarm-ctl: no such file: $promptfile" >&2; return 1; }
+
+  # All of the below are refused BEFORE anything touches specs/ or queue/ (spec 14 FR-2/FR-5:
+  # "nothing written" on refusal) — ahead of the atomic specs/ reservation, not just ahead of the
+  # sidecar writes.
+  if [[ -n "$files_list" && -z "$write_dir" ]]; then
+    echo "swarm-ctl: add --files requires --write (a manifest scopes a write target)" >&2
+    return 1
+  fi
+  # FR-5 (spec 14): a nonexistent .write target is refused loud at publish time — never mkdir'd,
+  # here or anywhere else in the bus (a typo'd target becoming a real empty directory would let
+  # the write-diff gate silently "pass" against the wrong place).
+  if [[ -n "$write_dir" && ! -d "$write_dir" ]]; then
+    echo "swarm-ctl: add --write: '$write_dir' does not exist — refusing (never mkdir'd by the bus)" >&2
+    return 1
+  fi
+  if [[ -n "$files_list" ]]; then
+    [[ -f "$files_list" ]] || { echo "swarm-ctl: add --files: no such file: $files_list" >&2; return 1; }
+    _validate_files_manifest "$write_dir" "$files_list" || return 1
+  fi
+
+  local id
+  id="$(basename "$promptfile" .prompt)"
+  mkdir -p "$BUSDIR/specs" "$BUSDIR/queue"
+  if [[ -e "$BUSDIR/queue/$id.prompt" ]]; then
+    echo "swarm-ctl: $id.prompt already exists in queue/ — refusing to clobber" >&2
+    return 1
+  fi
+  # Atomic reservation: copy the source into a hidden per-invocation temp inside specs/, then
+  # hardlink it to the real name — same-directory ln fails EEXIST if a concurrent add already
+  # reserved <id>, instead of cp+mv silently overwriting a same-id prompt written concurrently
+  # (bus-discipline.md: one atomic publish).
+  local tmp="$BUSDIR/specs/.add-$id.$$"
+  cp "$promptfile" "$tmp"
+  if ! ln "$tmp" "$BUSDIR/specs/$id.prompt" 2>/dev/null; then
+    rm -f "$tmp"
+    echo "swarm-ctl: $id.prompt already exists in specs/ — refusing to clobber" >&2
+    return 1
+  fi
+  rm -f "$tmp"
+
+  # spec 14 FR-3: re-publishing a previously parked id must not resolve onto an already-exhausted
+  # chain walk (a zero-byte limits/.chain-<id> survives a park otherwise) or a stale freeze — clear
+  # it now that the reservation above has guaranteed this publish will succeed.
+  _reset_card_state "$BUSDIR" "$id"
+
+  # Sidecars land in queue/ BEFORE the prompt does (wave-7 finding 4): a running pool only claims
+  # *.prompt out of queue/, so writing lane/write/files grants first (inert on their own — nothing
+  # can claim on a sidecar alone) and publishing the prompt LAST closes the window where a claim
+  # could land on an unpinned/ungranted prompt. The prompt keeps its specs/→queue/ two-step (the
+  # already-audited EEXIST reservation via `ln`, above — specs/ is never scanned by the pool, so
+  # that hop is invisible to it); the SIDECARS drop their own specs/ hop and write straight to
+  # queue/ — they carry no analogous same-id collision risk of their own to guard against (the
+  # queue/<id>.prompt existence check + the ln reservation above already own that for the id as a
+  # whole).
+  if [[ -n "$lane" ]]; then
+    printf '%s' "$lane" > "$BUSDIR/queue/$id.lane"
+  fi
+  if [[ -n "$write_dir" ]]; then
+    printf '%s' "$write_dir" > "$BUSDIR/queue/$id.write"
+  fi
+  if [[ -n "$files_list" ]]; then
+    cp "$files_list" "$BUSDIR/queue/$id.files"
+  fi
+  mv "$BUSDIR/specs/$id.prompt" "$BUSDIR/queue/$id.prompt"
+}
+
+cmd_abort() {
+  local pgid_file="$BUSDIR/run.pgid" pgid
+  [[ -f "$pgid_file" ]] || { echo "swarm-ctl: no run.pgid — nothing to abort" >&2; return 1; }
+  pgid="$(cat "$pgid_file")"
+  # Liveness-guard before signalling: a stale run.pgid (crash-leftover, or a value from a prior run
+  # whose pid has since been reused) would otherwise `kill -- -<pgid>` an innocent process group.
+  if ! kill -0 -- "-$pgid" 2>/dev/null; then
+    echo "swarm-ctl: run.pgid $pgid names no live process group (stale) — refusing to abort" >&2
+    return 1
+  fi
+  kill -- "-$pgid"
+}
+
+cmd_status() {
+  local counts done_n live_n f lane
+  counts="$(gate_count "$BUSDIR")"
+  done_n="${counts%% *}"
+  live_n="${counts##* }"
+  echo "gate: done=$done_n live=$live_n"
+  for f in "$BUSDIR"/limits/*.limited; do
+    [[ -e "$f" ]] || continue
+    lane="$(basename "$f" .limited)"
+    if limit_active "$BUSDIR" "$lane"; then
+      echo "limit: $lane ACTIVE"
+    else
+      echo "limit: $lane expired"
+    fi
+  done
+}
+
+cmd_kill() {
+  local id="$1" mode="requeue"
+  [[ "${2:-}" == "--cancel" ]] && mode="cancel"
+  local pidfile="$BUSDIR/pids/$id"
+  [[ -f "$pidfile" ]] || { echo "swarm-ctl: no running worker recorded for '$id'" >&2; return 1; }
+
+  # STOPped workers ignore TERM — CONT first; the frozen flag is cleared below, AFTER the claim
+  # is disposed (finding 2 ordering), not here.
+  _cont_if_frozen "$id" || true
+  kill_subtree "$(<"$pidfile")" TERM
+  rm -f "$pidfile"
+
+  # exact resolver (finding 1): see _claim_of comment — a bare glob prefix-matches dotted ids.
+  local claimfile found=0
+  claimfile="$(_claim_of "$BUSDIR" "$id")" || claimfile=""
+  if [[ -n "$claimfile" ]]; then
+    found=1
+    if [[ "$mode" == "cancel" ]]; then
+      mkdir -p "$BUSDIR/cancelled"
+      mv "$claimfile" "$BUSDIR/cancelled/$id.prompt"
+      # cancelling for good — drop the sidecars too (a requeue keeps them: the retry still needs
+      # its lane pin / write target).
+      _rm_sidecars "$id"
+    else
+      mv "$claimfile" "$BUSDIR/queue/$id.prompt"
+    fi
+  fi
+  rm -f "$BUSDIR/limits/$id.frozen"
+  (( found )) || echo "swarm-ctl: killed pid but no claimed/$id.* file found (already finalized?)" >&2
+  return 0
+}
+
+# cmd_nudge <id> [hint] — kill (if running) + requeue with optional operator hint (§4.6).
+# Staging via queue/.nudge-<id> so an in-place append cannot race the pool's claim rename.
+cmd_nudge() {
+  local id="$1" hint="${2:-}"
+  local pidfile="$BUSDIR/pids/$id" src="" claimfile staging
+
+  # (a) kill if running; absent pidfile = fine. CONT first if frozen (STOP ignores TERM). The
+  # frozen flag itself is left set until step (e) below, well after step (c) has already moved
+  # the claim out of claimed/ (finding 2 ordering) — clearing it here, before disposal, would
+  # reopen the reap() race.
+  if [[ -f "$pidfile" ]]; then
+    _cont_if_frozen "$id" || true
+    kill_subtree "$(<"$pidfile")" TERM
+    rm -f "$pidfile"
+  fi
+
+  # (b) claimed/<id>.* first, else queue/<id>.prompt; neither → rc1 loud (not usage banner).
+  # exact resolver (finding 1): see _claim_of comment — a bare glob prefix-matches dotted ids.
+  claimfile="$(_claim_of "$BUSDIR" "$id")" || claimfile=""
+  [[ -n "$claimfile" ]] && src="$claimfile"
+  if [[ -z "$src" && -e "$BUSDIR/queue/$id.prompt" ]]; then
+    src="$BUSDIR/queue/$id.prompt"
+  fi
+  if [[ -z "$src" ]]; then
+    rm -f "$BUSDIR/limits/$id.frozen"
+    echo "swarm-ctl: no prompt for '$id' in claimed/ or queue/" >&2
+    return 1
+  fi
+
+  # (c) stage under a name invisible to the *.prompt claim scan
+  mkdir -p "$BUSDIR/queue" "$BUSDIR/limits"
+  staging="$BUSDIR/queue/.nudge-$id"
+  mv "$src" "$staging"
+
+  # (d) optional operator hint block
+  if [[ -n "$hint" ]]; then
+    printf '\n\n## OPERATOR HINT (nudge %s)\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$hint" >> "$staging"
+  fi
+
+  # (e) fresh start — wipe prior failure/chain/freeze state (nudge = run again from the top).
+  # Shared with cmd_add via _reset_card_state (spec 14 FR-3) — one wipe list, two callers.
+  _reset_card_state "$BUSDIR" "$id"
+
+  # (f) atomic land; keep .lane/.write sidecars (requeue semantics, not cancel)
+  mv "$staging" "$BUSDIR/queue/$id.prompt"
+}
+
+# cmd_unpark <id>... | --all — spec 15 park-storm bulk resume. A parked card's prompt + sidecars
+# are already sitting untouched in queue/ (FR-7/FR-3 park loud, never drop the spec) — the ONLY
+# thing blocking it is limits/<id>.parked, so unpark's sole side effect is rm'ing that marker; the
+# next bus tick drains the card on its own, no re-add/re-nudge needed. Every removed marker also
+# gets chain_reset (src/swarm-lib.sh:1147) called on it FIRST, before the marker itself comes off:
+# a chain-exhausted card parks with a stale limits/.chain-<id> cursor still pointing past the end
+# of its lane chain, and a bus tick that drains the card before that cursor is cleared re-parks it
+# on the spot — no worker ever spawns (the ctl-side resume half of the stale-chain-marker gap).
+# --all excludes limits/takeover.parked on purpose: that marker is spec 11's watchdog-check
+# apex-succession record (FR-S2 "chain exhausted, parked, orch-seat left at fable" — swarm-ctl:797)
+# and is never per-card state a bulk resume owns; clearing it here would silently erase the
+# takeover subsystem's own park signal out from under it.
+#
+# Individual-id mode validates every id against the card id regex (swarm-run.sh's own id_re,
+# repeated here) BEFORE building any path — an id is interpolated straight into an `rm` path, so
+# something like `../../x` must never reach `rm` unchecked. It also refuses the literal id
+# "takeover" for the same reason --all skips it: limits/takeover.parked is spec 11's apex-
+# succession marker, never per-card state. Both cases warn to stderr and count as a miss — the
+# same partial-success semantics as a missing marker, never an abort of the whole loop.
+cmd_unpark() {
+  mkdir -p "$BUSDIR/limits"
+  if [[ "${1:-}" == "--all" ]]; then
+    local n=0 f id
+    for f in "$BUSDIR/limits"/*.parked; do
+      [[ -e "$f" ]] || continue
+      id="$(basename "$f" .parked)"
+      [[ "$id" == "takeover" ]] && continue
+      chain_reset "$BUSDIR" "$id"
+      rm -f "$f"
+      (( ++n ))
+    done
+    echo "swarm-ctl: unpark --all: removed $n marker(s)"
+    return 0
+  fi
+
+  local id_re='^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+  local id removed=0
+  for id in "$@"; do
+    if [[ ! "$id" =~ $id_re ]]; then
+      echo "swarm-ctl: unpark: '$id' is not a valid card id — skipping" >&2
+      continue
+    fi
+    if [[ "$id" == "takeover" ]]; then
+      echo "swarm-ctl: unpark: 'takeover' is the spec-11 apex-succession marker, not a per-card id — skipping" >&2
+      continue
+    fi
+    if [[ -e "$BUSDIR/limits/$id.parked" ]]; then
+      chain_reset "$BUSDIR" "$id"
+      rm -f "$BUSDIR/limits/$id.parked"
+      (( ++removed ))
+    else
+      echo "swarm-ctl: unpark: no limits/$id.parked marker" >&2
+    fi
+  done
+  (( removed > 0 ))
+}
+
+# cmd_pause_worker <id> — SIGSTOP freeze (§4.6b). Pidfile required.
+# Ordering (finding 2): frozen flag FIRST, then a fresh claim lease, then the actual STOP. reap()
+# skips any id with limits/<id>.frozen set, so setting that flag before the claim can go stale
+# closes the window; the claim-mtime touch is the second line of defense for a reap tick that
+# lands between the two. Residual ceiling (no new lock, per spec): a reap tick landing inside this
+# very sequence's own sub-second span — the touches shrink that window from LEASE_MIN-stale to
+# effectively never-stale, they don't eliminate it.
+cmd_pause_worker() {
+  local id="$1" claimfile
+  local pidfile="$BUSDIR/pids/$id"
+  [[ -f "$pidfile" ]] || { echo "swarm-ctl: no running worker recorded for '$id'" >&2; return 1; }
+  mkdir -p "$BUSDIR/limits"
+  touch "$BUSDIR/limits/$id.frozen"
+  # exact resolver (finding 1): see _claim_of comment — a bare glob prefix-matches dotted ids.
+  claimfile="$(_claim_of "$BUSDIR" "$id")" || claimfile=""
+  [[ -n "$claimfile" ]] && touch "$claimfile"
+  signal_subtree "$(<"$pidfile")" STOP
+}
+
+# cmd_resume_worker <id> — SIGCONT thaw (§4.6b). Ordering (finding 2): fresh claim lease FIRST,
+# then CONT, then rm the frozen flag last — reversing this (rm .frozen, then CONT) would let a
+# reap tick in between requeue a claim whose worker has been thawed but not yet resumed to normal
+# service, double-claiming it.
+cmd_resume_worker() {
+  local id="$1" claimfile
+  local pidfile="$BUSDIR/pids/$id"
+  claimfile="$(_claim_of "$BUSDIR" "$id")" || claimfile=""
+  [[ -n "$claimfile" ]] && touch "$claimfile"
+  if [[ -f "$pidfile" ]]; then
+    signal_subtree "$(<"$pidfile")" CONT
+  fi
+  rm -f "$BUSDIR/limits/$id.frozen"
+}
+
+# cmd_heartbeat [busdir] — spec 11 FR-S2: touch .bus/heartbeat (the ORCHESTRATOR's own liveness
+# signal at every gate/poll — never the exec pool) and seed .bus/orch-seat with "fable <epoch>" the
+# first time it's called for a run. Never overwrites an existing orch-seat: once a takeover has
+# rewritten it to a non-fable lane (or a repeat call finds "fable" already seeded), heartbeat's own
+# job is done — from here on the seat is rewritten only by watchdog-check (takeover) and by
+# swarm-loop's iterate, which reclaims a non-fable seat back to fable after the degraded-window
+# re-audit is logged (handoff-degraded.md removed).
+cmd_heartbeat() {
+  local busdir="${1:-$BUSDIR}"
+  mkdir -p "$busdir"
+  touch "$busdir/heartbeat"
+  if [[ ! -e "$busdir/orch-seat" ]]; then
+    printf 'fable %s\n' "$(date +%s)" > "$busdir/orch-seat"
+  fi
+}
+
+# --- spec 11 watchdog shared helpers ---
+
+# _wd_canon <busdir> — one canonicalization rule for arm/check/disarm: they must all resolve the
+# same absolute spelling (the crontab tag is compared byte-for-byte), and a relative busdir would
+# also make the cron command resolve against cron's $HOME cwd — a dead watchdog.
+_wd_canon() {
+  if [[ -d "$1" ]]; then (cd "$1" && pwd); else printf '%s' "$1"; fi
+}
+
+# _wd_tag <busdir> — the tagged-crontab-line suffix arm installs and disarm removes; one spelling.
+_wd_tag() { printf '# unimatrix-watchdog %s' "$1"; }
+
+# _cron_snapshot — current crontab; empty on none (`crontab -l` exits 1 on an empty crontab —
+# tolerated, not an error).
+_cron_snapshot() { crontab -l 2>/dev/null || true; }
+
+# _cron_lock — serialize the crontab read-modify-write shared by arm/disarm: two concurrent runs
+# arming different busdirs (or a disarm racing an arm) would otherwise read the same snapshot and
+# the last writer wins — the loser's tagged line silently vanishes (a dead watchdog) or a
+# disarmed line is resurrected. Per-user lock file (the crontab is per-user and may be shared
+# across checkouts); fd 8 releases on process exit — every verb here is short-lived.
+_cron_lock() {
+  exec 8>"${XDG_RUNTIME_DIR:-/tmp}/unimatrix-crontab-$EUID.lock"
+  flock 8
+}
+
+# _cron_minus_tag <tag> — stdin minus every line whose SUFFIX is exactly <tag>. End-anchored, not
+# substring (the tag is always the line's suffix): a substring grep -F would cross-match busdirs
+# that are path-prefixes of each other (run1 vs run10) — no-opping one run's arm, or deleting a
+# sibling run's line on disarm. ENVIRON, not `awk -v` (which escape-processes backslashes). Used
+# by arm ("filter changed the snapshot" = already armed) and by disarm (the filter output IS the
+# new crontab) — one program, one escaping rationale.
+_cron_minus_tag() {
+  t="$1" awk 'BEGIN { t = ENVIRON["t"] }
+              substr($0, length($0) - length(t) + 1) != t'
+}
+
+# cmd_watchdog_arm [busdir] — spec 11 FR-S2: idempotently install exactly ONE crontab line tagged
+# "# unimatrix-watchdog <busdir>" running `watchdog-check <busdir>` every 5 minutes — the single
+# sanctioned standing-trigger exception to the project's no-daemon rule (maintainer sign-off
+# 2026-07-24). Re-arming with the tag already present is a no-op; every other crontab line (this
+# busdir's prior lines aside, which never exist twice, and any other run's/job's lines) survives
+# untouched. Also persists the arming run's RESOLVED config plane to <busdir>/watchdog.env: a
+# cron tick carries no env, so without it watchdog-check would conf_load the repo-default
+# swarm.conf — wrong ORCH_CHAIN/ORCH_TAKEOVER_MIN/BUDGET_USD/ENV_MASTER_FILE for a run launched
+# with CONF=... or env overrides (spawn refused and parked on every tick, budget-exhausted kimi
+# seated as unrestricted, wrong takeover timing).
+cmd_watchdog_arm() {
+  local busdir tag existing line
+  busdir="$(_wd_canon "${1:-$BUSDIR}")"
+  tag="$(_wd_tag "$busdir")"
+  # Refuse what a crontab line cannot carry, instead of installing a line that dead-ticks forever
+  # (the silent-stall class spec 11 exists to prevent): cron reads a literal % as newline (the
+  # rest of the line becomes stdin), and quotes/newlines break the line's sh -c parse. The
+  # caller's $PATH is NOT part of this check anymore — it never reaches the line (see below);
+  # it rides watchdog.env %q-quoted, where any character is representable.
+  local unrep="$SCRIPT_DIR$busdir"
+  if [[ "$unrep" == *%* || "$unrep" == *\'* || "$unrep" == *\"* || "$unrep" == *$'\n'* ]]; then
+    echo "swarm-ctl: watchdog-arm: SCRIPT_DIR/busdir contains %, a quote, or a newline — not representable in a crontab line, refusing to arm" >&2
+    return 1
+  fi
+  # The line carries a SHORT FIXED PATH, never the session's (live drill 2026-07-24: a real
+  # dev-box $PATH baked onto the line blew crontab's per-line limit — '"-":1: command too long,
+  # can't install' — and the run continued unprotected). The fixed six dirs cover the coreutils
+  # the check needs before it sources <busdir>/watchdog.env, which restores the arming session's
+  # FULL resolved PATH (flock from linuxbrew, jq/awk/git, claude's dir) for everything after.
+  # Script path and busdir are single-quoted (the line runs via sh -c): a space in either would
+  # otherwise word-split the command into a wrong-arg watchdog-check that skips every tick as
+  # "complete". Unrepresentable characters refused above.
+  line="*/5 * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin '$SCRIPT_DIR/src/swarm-ctl' watchdog-check '$busdir' $tag"
+  # Belt+braces length guard (busdir appears twice — arg + tag — and can be long): refuse rather
+  # than hand crontab a line near its per-line limit. Same refusal family as the %/quote check.
+  if (( ${#line} > 900 )); then
+    echo "swarm-ctl: watchdog-arm: composed crontab line is ${#line} chars (> 900 safety cap — busdir too long), refusing to arm" >&2
+    return 1
+  fi
+  conf_load "$CONF"
+  mkdir -p "$busdir"
+  local cpath="$CONF"
+  # CONF may be relative to the arming shell's cwd — cron's cwd is $HOME; make it absolute.
+  [[ -f "$cpath" ]] && cpath="$(cd "$(dirname "$cpath")" && pwd)/$(basename "$cpath")"
+  # Resolve claude NOW, on the arming session's full PATH — the check's spawn preflight prefers
+  # $CLAUDE_BIN and never depends on cron-side PATH resolution. Unresolvable here = omit; the
+  # check falls back to `command -v claude` on the watchdog.env-restored PATH.
+  local cbin
+  cbin="$(command -v claude 2>/dev/null || true)"
+  {
+    # The full resolved runtime plane the minimal cron-line PATH cannot carry (see line note
+    # above): sourced by watchdog-check before anything PATH-dependent runs.
+    printf 'PATH=%q\n' "$PATH"
+    [[ -z "$cbin" ]] || printf 'CLAUDE_BIN=%q\n' "$cbin"
+    printf 'CONF=%q\n' "$cpath"
+    printf 'ORCH_CHAIN=%q\n' "$ORCH_CHAIN"
+    printf 'PLAN_CHAIN=%q\n' "$PLAN_CHAIN"
+    printf 'ORCH_TAKEOVER_MIN=%q\n' "$ORCH_TAKEOVER_MIN"
+    printf 'BUDGET_USD=%q\n' "$BUDGET_USD"
+    [[ -z "${ENV_MASTER_FILE:-}" ]] || printf 'ENV_MASTER_FILE=%q\n' "$ENV_MASTER_FILE"
+    [[ -z "${KIMI_MAX_THINKING_TOKENS:-}" ]] || printf 'KIMI_MAX_THINKING_TOKENS=%q\n' "$KIMI_MAX_THINKING_TOKENS"
+    [[ -z "${LEDGER_FILE:-}" ]] || printf 'LEDGER_FILE=%q\n' "$LEDGER_FILE"
+  } > "$busdir/watchdog.env.$$"
+  mv -f "$busdir/watchdog.env.$$" "$busdir/watchdog.env"
+  _cron_lock
+  existing="$(_cron_snapshot)"
+  if [[ "$(_cron_minus_tag "$tag" <<<"$existing")" != "$existing" ]]; then
+    return 0  # already armed — the filter found (and dropped) this busdir's tagged line
+  fi
+  # Verified install (live drill 2026-07-24): a rejected `crontab -` must be FATAL-LOUD, never a
+  # silent continue — an unarmed watchdog is the exact protection spec 11 exists for, and
+  # swarm-loop's cmd_run arms under set -e, so rc 1 here correctly refuses to start unattended.
+  # rc alone is not proof either (some cron front-ends exit 0 and drop the submission): re-snapshot
+  # and require the tagged line to actually be present.
+  if ! {
+    [[ -n "$existing" ]] && printf '%s\n' "$existing"
+    printf '%s\n' "$line"
+  } | crontab -; then
+    echo "swarm-ctl: watchdog-arm: crontab install failed (crontab - rejected the new table)" >&2
+    return 1
+  fi
+  if ! _cron_snapshot | grep -qF -- "$tag"; then
+    echo "swarm-ctl: watchdog-arm: crontab install failed (tagged line absent from crontab -l after install)" >&2
+    return 1
+  fi
+}
+
+# cmd_watchdog_disarm [busdir] — spec 11 FR-S2: remove only this busdir's tagged crontab line
+# (other lines, tagged for a different busdir or untagged, survive — see _cron_minus_tag). rc 0
+# whether or not a tagged line existed — disarm is part of every run close, normal or degraded,
+# and must never fail loudly just because the watchdog was never armed.
+cmd_watchdog_disarm() {
+  local busdir tag existing filtered
+  busdir="$(_wd_canon "${1:-$BUSDIR}")"
+  tag="$(_wd_tag "$busdir")"
+  _cron_lock
+  existing="$(_cron_snapshot)"
+  [[ -n "$existing" ]] || return 0
+  filtered="$(_cron_minus_tag "$tag" <<<"$existing")" || filtered=""
+  # No-op disarm must not rewrite the crontab at all: attended runs call disarm defensively on
+  # every close, and an unconditional re-pipe races concurrent operator `crontab -e` edits.
+  [[ "$filtered" == "$existing" ]] && return 0
+  if [[ -n "$filtered" ]]; then
+    printf '%s\n' "$filtered" | crontab -
+  else
+    printf '' | crontab -
+  fi
+}
+
+# _first_live_lane <busdir> <chain> — first member past the chain's leading "fable" that is not
+# lane_blocked (limited/dead/budget-gated); rc 1 (no output) on exhaustion. ONE walk serving both
+# ORCH_CHAIN and PLAN_CHAIN — a future availability/budget tweak edited into a duplicated walk
+# would silently split ORCH and PLAN succession semantics.
+_first_live_lane() {
+  local busdir="$1" x
+  local -a c
+  read -ra c <<<"$2"
+  for x in "${c[@]:1}"; do
+    if ! lane_blocked "$busdir" "$x"; then
+      printf '%s' "$x"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# _open_criteria <busdir> — print the criteria.md of every still-OPEN loop run (one with no
+# sibling COMPLETE.md/HALTED.md); rc 1 when none. Closed runs' contracts are history —
+# loop/<run-id>/ persists after completion, and a continuation driver handed a closed run's goal
+# file could resume the wrong mandate. One definition of "the live run", shared by the skip
+# predicate, the handoff goal-file dump, and the driver-cwd pick.
+_open_criteria() {
+  local busdir="$1" c d rc=1
+  # /swarm-loop keeps its contract at loop/<run-id>/criteria.md (swarm-loop.sh _loopdir); the
+  # bare loop/criteria.md spelling is globbed too, defensively.
+  for c in "$busdir/loop"/criteria.md "$busdir/loop"/*/criteria.md; do
+    [[ -f "$c" ]] || continue
+    d="${c%/criteria.md}"
+    if [[ ! -e "$d/COMPLETE.md" && ! -e "$d/HALTED.md" ]]; then
+      printf '%s\n' "$c"
+      rc=0
+    fi
+  done
+  return "$rc"
+}
+
+# _watchdog_should_skip <busdir> — spec 11 FR-S2: rc 0 iff watchdog-check must be a silent no-op —
+# heartbeat age <= ORCH_TAKEOVER_MIN minutes, the run is already complete (no regular files in
+# queue/ or claimed/ AND no still-open loop run), or orch-seat already names a non-fable lane (a
+# takeover fires at most once per run — no repeat handoffs down the same ladder). A MISSING
+# heartbeat counts as stale (never a skip on freshness grounds alone) — the other two conditions
+# still apply on their own merits.
+_watchdog_should_skip() {
+  local busdir="$1"
+  local hb="$busdir/heartbeat"
+  if [[ -f "$hb" ]]; then
+    local age_min
+    age_min=$(( ( $(date +%s) - $(_stat_mtime "$hb") ) / 60 ))
+    (( age_min <= ORCH_TAKEOVER_MIN )) && return 0
+  fi
+  local queue_n claimed_n
+  queue_n="$(find "$busdir/queue" -maxdepth 1 -type f | wc -l)"
+  claimed_n="$(find "$busdir/claimed" -maxdepth 1 -type f | wc -l)"
+  # An empty bus alone is NOT "complete" for a loop run: between pool runs (oracle execution,
+  # judging, checkpoint, next-iteration planning) queue/ and claimed/ are empty for most of the
+  # wall clock — a loop driver killed mid-oracle would otherwise stall silently forever, every
+  # tick of a live armed watchdog no-opping as "run complete" (the missed-takeover class).
+  # Completion additionally requires no still-open loop run under this busdir.
+  if (( queue_n == 0 && claimed_n == 0 )) && ! _open_criteria "$busdir" >/dev/null; then
+    return 0
+  fi
+  [[ "$(orch_seat "$busdir")" != fable ]] && return 0
+  return 1
+}
+
+# _watchdog_bus_state <busdir> — plain-text queue/claimed/done id listing + limits/*.parked reasons
+# (if any), folded into the continuation driver's handoff prompt so it knows exactly what's in
+# flight without re-deriving it itself.
+_watchdog_bus_state() {
+  local busdir="$1" d f
+  for d in queue claimed 'done'; do
+    echo "$d/:"
+    for f in "$busdir/$d"/*; do
+      [[ -e "$f" ]] || continue
+      echo "  $(basename "$f")"
+    done
+  done
+  echo "parked:"
+  for f in "$busdir/limits"/*.parked; do
+    [[ -e "$f" ]] || continue
+    if [[ -s "$f" ]]; then
+      echo "  $(basename "$f"): $(<"$f")"
+    else
+      echo "  $(basename "$f")"
+    fi
+  done
+}
+
+# _watchdog_write_handoff <busdir> [plan_lane] — spec 11 FR-S1: build loop/handoff-prompt.md —
+# names the recipient a continuation driver, logs the PLAN seat for spec patches (FR-S3: PLAN has
+# no seat file — the driver's codex/kimi choice is logged here, in the handoff prompt), dumps
+# _watchdog_bus_state + the goal file (loop criteria.md — FR-S1 acceptance: "bus state ... + the
+# goal file"), then appends the verbatim bounded-mandate block (a bats/grep check confirms every
+# phrase is present, byte for byte) and the FR-S4 handoff-back instruction: write
+# loop/handoff-degraded.md on handoff-back, resume checklist opening with the Fable re-audit.
+_watchdog_write_handoff() {
+  local busdir="$1" plan_lane="${2:-}"
+  local g goal_found=0
+  mkdir -p "$busdir/loop"
+  {
+    echo "# unimatrix continuation driver handoff (spec 11 FR-S1)"
+    echo
+    echo "You are seated as the continuation driver for the ORCHESTRATOR role: Fable's heartbeat"
+    echo "went stale mid-run and this run's succession ladder (ORCH_CHAIN) handed the seat to you."
+    echo
+    if [[ -n "$plan_lane" ]]; then
+      echo "PLAN seat for spec patches: $plan_lane (first live PLAN_CHAIN lane past fable —"
+      echo "FR-S1/FR-S3). Route any spec patch through it; never author one yourself."
+    else
+      echo "PLAN seat for spec patches: NONE — PLAN_CHAIN exhausted; park any card that needs a"
+      echo "spec patch instead of authoring one yourself."
+    fi
+    echo
+    echo "## Bus state ($busdir)"
+    echo
+    _watchdog_bus_state "$busdir"
+    echo
+    echo "## Goal file"
+    echo
+    # Only OPEN loop runs are embedded (_open_criteria): loop/<run-id>/ persists after
+    # completion, and a driver handed run1's and run2's closed contracts alongside run3's live
+    # one could resume the wrong mandate. Each file is labeled with its run-id path so a
+    # multi-run busdir stays unambiguous.
+    while IFS= read -r g; do
+      goal_found=1
+      echo "### ${g#"$busdir/"}"
+      echo
+      cat "$g"
+      echo
+    done < <(_open_criteria "$busdir")
+    (( goal_found )) || echo "(no open loop criteria.md under $busdir/loop — not a live /swarm-loop run)"
+    echo
+    cat <<EOF
+BOUNDED MANDATE (spec 11 FR-S1):
+- Finish in-flight waves; run the gates/tests; park anything ambiguous.
+- No new scope. No spec lifecycle changes. No pushes. No destructive ops.
+- MAX_ITERATIONS / BUDGET_USD ceilings apply unchanged.
+- Everything you produce is provisional until Fable re-audits (degraded:true).
+
+ON HANDOFF-BACK (spec 11 FR-S4): before you stop — session end or ladder exhaustion —
+write $busdir/loop/handoff-degraded.md describing everything you did. That file blocks
+new-wave planning until Fable's re-audit is logged, and it MUST open with this resume
+checklist, re-audit first — nothing below item 1 is actionable before it:
+
+## Resume checklist
+1. Fable re-audit: diff the scratch worktree, re-run the gates, and confirm or re-open
+   every verdict produced during this degraded window.
+2. (your remaining resume steps)
+EOF
+  } > "$busdir/loop/handoff-prompt.md"
+}
+
+# _watchdog_spawn_driver <busdir> <lane> — spec 11 FR-S1/FR-S2: spawn the bounded continuation
+# driver seated on <lane>. kimi rides the claude binary via the exact child-env swap
+# rules/unimatrix/model-lanes.md documents for it (env -i cage, Moonshot base URL/token, tier-model
+# selector, key grepped from $ENV_MASTER_FILE — never sourced) — the only lane that can plausibly
+# stand in for Fable's own agentic session. The handoff prompt is fed on stdin (< the prompt file
+# itself), not embedded as an argv positional — the file can run to many lines and the driver reads
+# it, it doesn't receive it pre-flattened into one shell word. Backgrounded and redirected to
+# run-takeover.jsonl: watchdog-check is a 5-minute cron poll, never a process that blocks on the
+# driver's own potentially multi-hour run.
+_watchdog_spawn_driver() {
+  local busdir="$1" lane="$2"
+  case "$lane" in
+    kimi)
+      # Pre-flight: a backgrounded env(1) that can't resolve claude fails AFTER the takeover
+      # would have been consumed — refuse here instead so the caller parks loudly and never seats
+      # a lane it cannot actually spawn (FR-S2). Prefer $CLAUDE_BIN (absolute, resolved at arm
+      # time on the arming session's full PATH, sourced from watchdog.env) so the spawn never
+      # depends on cron-side PATH at all; fall back to command -v for manual/pre-arm checks.
+      local cbin="${CLAUDE_BIN:-}"
+      if [[ -z "$cbin" || ! -x "$cbin" ]]; then
+        cbin="$(command -v claude 2>/dev/null || true)"
+      fi
+      if [[ -z "$cbin" ]]; then
+        echo "swarm-ctl: watchdog-check: 'claude' not resolvable (CLAUDE_BIN unset/stale and not on PATH) — cannot spawn kimi continuation driver" >&2
+        return 1
+      fi
+      local kkey home dcwd cfile tgt
+      kkey="$(_env_master_key MOONSHOT_API_KEY)" || return 1
+      home="$(_scratch_home "$busdir" kimi takeover)"
+      # Deliberate driver cwd — under real cron the inherited cwd is the operator's REAL $HOME,
+      # and claude -p auto-trusts its CWD under acceptEdits (lane_cmd's live-verified contract):
+      # an un-chdir'd driver would get un-prompted edit rights rooted at the home directory while
+      # lacking any working-dir context for its FR-S1 mandate. Same chdir contract as lane_cmd's
+      # write-capable lanes: the open loop run's `target:` worktree when present, else the repo
+      # root (dirname of busdir).
+      dcwd="$(dirname "$busdir")"
+      cfile="$(_open_criteria "$busdir" | head -n1)" || true
+      if [[ -n "$cfile" ]]; then
+        tgt="$(grep -m1 '^target: ' "$cfile" || true)"
+        tgt="${tgt#target: }"
+        [[ -n "$tgt" && -d "$tgt" ]] && dcwd="$tgt"
+      fi
+      # CDWRAP portability split mirrors lane_cmd: GNU env has -C, BSD/macOS env doesn't.
+      local -a envbase=(env -i "PATH=$PATH" "HOME=$home" LANG=C.UTF-8) cdwrap=()
+      if (( ENV_HAS_C )); then
+        envbase=(env -i -C "$dcwd" "PATH=$PATH" "HOME=$home" LANG=C.UTF-8)
+      else
+        # shellcheck disable=SC2016  # $1/$@ are for the INNER bash -c, must NOT expand here
+        cdwrap=(bash -c 'cd "$1" && shift && exec "$@"' _ "$dcwd")
+      fi
+      local -a argv=("${envbase[@]}"
+                     ANTHROPIC_BASE_URL=https://api.moonshot.ai/anthropic
+                     "ANTHROPIC_AUTH_TOKEN=$kkey"
+                     ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k3
+                     ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k3
+                     ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k3
+                     API_TIMEOUT_MS=3000000
+                     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+                     # model-lanes.md kimi spawn contract, reused unchanged (spec 11 cross-ref):
+                     # runaway thinking bills REAL $ at $15/M out — same cap as lane_cmd's kimi
+                     # arm, and this driver is the longest-running kimi invocation in the system.
+                     "MAX_THINKING_TOKENS=${KIMI_MAX_THINKING_TOKENS:-6000}"
+                     "${cdwrap[@]}" "$cbin" -p --output-format stream-json --verbose
+                     # The FR-S1 mandate ("finish in-flight waves, run the existing gates/tests")
+                     # needs real tool use — headless claude -p denies Bash/Edit without a mode.
+                     # acceptEdits matches the glm/kimi write-card arms; bypassPermissions stays
+                     # forbidden (containment gate, no exceptions).
+                     --permission-mode acceptEdits)
+      # 9>&- : never leak the caller's takeover.lock fd into the (potentially multi-hour) driver.
+      # stderr gets its own sidecar, mirroring _spawn_worker (bus-discipline.md: run-*.jsonl
+      # carries whole JSONL records only — merged unbuffered stderr fragments would interleave
+      # partial non-record writes into the firehose-tailed file). The close-out after the driver
+      # exits folds the REAL Moonshot $ (recomputed from .usage at list price) into the kimi
+      # budget accumulator (limits/kimi.spend — FR-S1: "BUDGET_USD ceilings apply unchanged") and
+      # appends the actual-cost ledger row (model-lanes.md "Ledger — no silent spend").
+      (
+        "${argv[@]}" <"$busdir/loop/handoff-prompt.md" \
+          >>"$busdir/run-takeover.jsonl" 2>>"$busdir/run-takeover.jsonl.stderr" || true
+        _kimi_spend_add "$busdir" takeover
+        ledger_failed_row "$busdir" takeover kimi "continuation-driver close-out"
+      ) 9>&- &
+      ;;
+    *)
+      echo "swarm-ctl: watchdog-check: unsupported continuation-driver lane '$lane'" >&2
+      return 1
+      ;;
+  esac
+}
+
+# cmd_watchdog_check [busdir] — spec 11 FR-S2: the watchdog poll body. Silent rc-0 no-op per
+# _watchdog_should_skip; otherwise takes flock on limits/takeover.lock (non-blocking — a held lock
+# means another tick is already mid-takeover, so this tick exits 0 silently too), RE-CHECKS the
+# no-op conditions under the lock (closes the two-concurrent-ticks race), walks ORCH_CHAIN past its
+# leading "fable" for the first lane that's neither lane_blocked (limited/dead) nor budget-gated,
+# seats it on orch-seat, and spawns the continuation driver. An exhausted chain parks loudly
+# (limits/takeover.parked + stderr) instead of spawning anything.
+cmd_watchdog_check() {
+  local busdir
+  busdir="$(_wd_canon "${1:-$BUSDIR}")"
+  # The arming run's resolved config plane (written by watchdog-arm): a cron tick carries no env,
+  # so without this conf_load would resolve the repo-default swarm.conf — wrong chain/threshold/
+  # budget/key file for a run launched with CONF=... or env overrides (spawn refused and parked
+  # on every tick, budget-exhausted kimi seated as unrestricted, wrong takeover timing). Sourced
+  # BEFORE conf_load so its values occupy FR-1's env slot; absent file (manual check, pre-arm) =
+  # current-environment behavior unchanged.
+  if [[ -f "$busdir/watchdog.env" ]]; then
+    # shellcheck source=/dev/null
+    source "$busdir/watchdog.env"
+  fi
+  conf_load "$CONF"
+
+  _watchdog_should_skip "$busdir" && return 0
+
+  mkdir -p "$busdir/limits"
+  exec 9>"$busdir/limits/takeover.lock"
+  local frc=0
+  flock -n 9 || frc=$?
+  if (( frc == 1 )); then
+    # Lock held — another tick is mid-takeover. The one legitimate silent skip here.
+    return 0
+  elif (( frc != 0 )); then
+    # rc 127/126 = flock itself unresolvable/unrunnable (cron's minimal PATH), NOT a held lock —
+    # swallowing it as a clean no-op would silently skip every tick forever, the exact
+    # silent-stall class spec 11 exists to prevent. Park loudly instead.
+    touch "$busdir/limits/takeover.parked"
+    echo "swarm-ctl: watchdog-check: flock failed rc=$frc (binary missing from PATH?) — parked, no takeover possible" >&2
+    return 0
+  fi
+
+  _watchdog_should_skip "$busdir" && return 0
+
+  local lane plan_lane
+  lane="$(_first_live_lane "$busdir" "$ORCH_CHAIN")" || lane=""
+
+  if [[ -z "$lane" ]]; then
+    touch "$busdir/limits/takeover.parked"
+    echo "swarm-ctl: watchdog-check: ORCH_CHAIN exhausted for $busdir — parking, no driver spawned" >&2
+    return 0
+  fi
+
+  # FR-S1/FR-S3: PLAN succession — walk PLAN_CHAIN past fable for the first live lane (codex,
+  # else kimi, by default); the choice is logged in the handoff prompt (PLAN has no seat file).
+  plan_lane="$(_first_live_lane "$busdir" "$PLAN_CHAIN")" || plan_lane=""
+
+  _watchdog_write_handoff "$busdir" "$plan_lane"
+  # Spawn FIRST, seat only on success (header design constraint): a seat rewritten before a
+  # failed spawn (missing MOONSHOT key, unresolvable claude, unsupported lane) would leave a
+  # non-fable seat with no driver, and _watchdog_should_skip would then silently no-op every
+  # later tick — a permanent silent stall. Failure parks loudly; the seat stays fable so the
+  # failure is visible and a later tick can still act. The lock fd never reaches the driver
+  # (_watchdog_spawn_driver backgrounds with 9>&-); this process releases it on exit, so the
+  # seat write below still happens under the flock.
+  if ! _watchdog_spawn_driver "$busdir" "$lane"; then
+    touch "$busdir/limits/takeover.parked"
+    echo "swarm-ctl: watchdog-check: continuation-driver spawn failed on lane '$lane' for $busdir — parked, orch-seat left at fable" >&2
+    return 0
+  fi
+  # Atomic seat replace (bus-discipline.md: same-fs rename is the atomic primitive): an in-place
+  # `>` truncate opens an empty-file window a concurrent reader (orch_degraded in swarm-run.sh's
+  # done-record arm, _judge_ok's seat clause) would read as "fable" mid-takeover, breaking
+  # FR-S4's every-degraded-record invariant.
+  printf '%s %s\n' "$lane" "$(date +%s)" > "$busdir/orch-seat.tmp"
+  mv -f "$busdir/orch-seat.tmp" "$busdir/orch-seat"
+  # Spawn-time run-evidence row (model-lanes.md "Ledger — no silent spend" + repo Boundaries:
+  # never spend on a lane without logging it): the actual-cost close-out row and the
+  # limits/kimi.spend budget fold follow from the driver's own close-out — see
+  # _watchdog_spawn_driver.
+  _ledger_append_row "${LEDGER_FILE:-$(dirname "$busdir")/docs/ops/llm-runs.md}" \
+    "$(date +%F)" "takeover (heartbeat-stale — continuation driver spawned)" \
+    "Moonshot PAYG (Anthropic-compat)" \
+    "real \$ accrues — folds into limits/kimi.spend + actual-cost row on driver exit"
+}
+
+# --- spec 12 FR-5: operator surfaces over the speedwars ledger (report / postmortem / review-stub) -
+
+# _speedwars_ledger_file <busdir> — the ledger path speed_row (src/swarm-lib.sh) resolves to: an
+# explicit $SPEEDWARS_FILE override, else <busdir-parent>/docs/ops/speedwars.jsonl. Read-only mirror
+# of speed_row's file-resolution block (swarm-lib.sh is out of scope for this file) — swarm-ctl
+# never writes this file, so it skips speed_row's mkdir-on-override / dir-must-exist-by-default
+# guards, which only matter to a writer.
+_speedwars_ledger_file() {
+  local busdir="$1"
+  if [[ -n "${SPEEDWARS_FILE:-}" ]]; then
+    printf '%s' "$SPEEDWARS_FILE"
+  else
+    printf '%s' "$(dirname "$busdir")/docs/ops/speedwars.jsonl"
+  fi
+}
+
+# cmd_report [file] — spec 12 FR-5: exec src/speedwars-report.sh, forwarding the optional ledger-
+# file override straight through (its own argv contract: "${1:-<repo>/docs/ops/speedwars.jsonl}").
+# exec so the report script's stdout AND exit code become swarm-ctl's own — no wrapper double-print,
+# no swallowed rc. A missing ledger is already fatal-loud inside speedwars-report.sh; only a missing
+# report SCRIPT is swarm-ctl's own thing to check.
+cmd_report() {
+  local report_script="$SCRIPT_DIR/src/speedwars-report.sh"
+  [[ -f "$report_script" ]] || {
+    echo "swarm-ctl: report: missing $report_script" >&2
+    return 1
+  }
+  exec "$report_script" "$@"
+}
+
+# cmd_postmortem [run] — spec 12 FR-5: pretty-print run-summary row(s) from the speedwars ledger.
+# No arg: the single newest run-summary row (by ts) across all runs. With a run arg: every
+# run-summary row for that run (a run can close more than once, e.g. full then verify — FR-3's
+# "last row per id wins" is about the branch rows folded INTO one run-summary, not about how many
+# run-summary rows a run accumulates). Nonzero + loud stderr when the ledger is absent or nothing
+# matches — a silently empty postmortem would read as "this run was clean".
+cmd_postmortem() {
+  local run="${1:-}" file
+  file="$(_speedwars_ledger_file "$BUSDIR")"
+  [[ -f "$file" ]] || {
+    echo "swarm-ctl: postmortem: no ledger at $file" >&2
+    return 1
+  }
+  # Tolerant reader first: the ledger is append-only and concurrently written, so ONE torn line
+  # must not make postmortem exit nonzero and report "no rows" for an otherwise healthy run.
+  local out rows
+  rows="$(jq -R -c 'fromjson? // empty' "$file")"
+  if [[ -n "$run" ]]; then
+    out="$(jq -c --arg run "$run" \
+      'select(type == "object" and .type == "run-summary" and .run == $run)' <<<"$rows")"
+  else
+    out="$(jq -cs \
+      'map(select(type == "object")) | [.[] | select(.type == "run-summary")] | sort_by(.ts) | last // empty' \
+      <<<"$rows")"
+  fi
+  if [[ -z "$out" ]]; then
+    if [[ -n "$run" ]]; then
+      echo "swarm-ctl: postmortem: no run-summary rows for run '$run' in $file" >&2
+    else
+      echo "swarm-ctl: postmortem: no run-summary rows in $file" >&2
+    fi
+    return 1
+  fi
+  jq . <<<"$out"
+}
+
+# cmd_review_stub [busdir] — spec 12 FR-5: print (stdout ONLY — writes nothing) a run-reviews.md-
+# style skeleton for this bus: mechanical fields pre-filled from the ledger's branch rows for this
+# bus's run plus this bus's own done/ count; subjective sections (lane scorecards, what-slowed,
+# next-run-change) are left as empty template headings — a nudge for the human/orchestrator review,
+# never a substitute for it. Mirrors docs/ops/run-reviews.md's table shape where fields are
+# mechanically derivable; fields that aren't (project/plan, complexity mix, reviewer findings, ...)
+# stay blank rather than guessed.
+cmd_review_stub() {
+  local busdir="${1:-$BUSDIR}"
+  # _run_label (src/swarm-lib.sh, P0-FR1): THE one run-label derivation, shared with
+  # speed_row/run_summary/feedback_stubs — swarm-ctl already sources swarm-lib.sh above, so this
+  # calls it directly rather than repeating the expression a 4th time.
+  local run; run="$(_run_label "$busdir")"
+  local file
+  file="$(_speedwars_ledger_file "$busdir")"
+
+  local card_n=0
+  # $(( )) strips wc's platform-dependent leading whitespace — the rendered row is asserted verbatim.
+  [[ -d "$busdir/done" ]] && card_n=$(( $(find "$busdir/done" -maxdepth 1 -type f | wc -l) ))
+
+  local rows='[]'
+  # Tolerant reader (same reason as cmd_postmortem): one torn ledger line must not blank the stub.
+  [[ -f "$file" ]] && rows="$(jq -R -c 'fromjson? // empty' "$file" | jq -cs --arg run "$run" \
+    'map(select(type == "object" and .type == null and .run == $run))')"
+
+  local date_str lanes wall_secs hist median
+  date_str="$(jq -r 'if length == 0 then (now | strftime("%Y-%m-%d"))
+    else (map(.ts) | min | fromdateiso8601 | strftime("%Y-%m-%d")) end' <<<"$rows")"
+  lanes="$(jq -r '[.[] | .served_lane // empty] | unique
+    | if length == 0 then "(none)" else join(", ") end' <<<"$rows")"
+  wall_secs="$(jq -r 'if length < 2 then "n/a"
+    else (((map(.ts | fromdateiso8601) | max) - (map(.ts | fromdateiso8601) | min) | tostring) + "s") end' \
+    <<<"$rows")"
+  # `timeout-salvaged` counts as done — it writes a done/ marker, so excluding it made the
+  # histogram disagree with the card count printed two rows above it.
+  hist="$(jq -r '
+    (map(select(.outcome == "done" or .outcome == "timeout-salvaged")) | length) as $d
+    | (map(select(.outcome == "timeout")) | length) as $t
+    | (map(select(.outcome == "parked")) | length) as $p
+    | (map(select(.outcome == "lane-unusable")) | length) as $u
+    | "done=\($d) timeout=\($t) parked=\($p) lane-unusable=\($u)"' <<<"$rows")"
+  median="$(jq -r '
+    def median: sort | if length == 0 then null else .[((length - 1) / 2) | floor] end;
+    group_by(.served_lane) | map(select(.[0].served_lane != null))
+    | map({lane: .[0].served_lane, med: ([.[] | .wall_secs | select(. != null)] | median)})
+    | if length == 0 then "(no lane data)" else (map("\(.lane): \(.med // "-")s") | join(" · ")) end' \
+    <<<"$rows")"
+
+  cat <<TEMPLATE
+## $run — $date_str — <one-line goal>
+
+| Dimension | Value |
+|---|---|
+| Project / plan | |
+| Waves × cards | |
+| Complexity mix | |
+| Lanes used | $lanes |
+| Total wall-clock | $wall_secs |
+| Effective concurrency | |
+| Median card wall (per lane) | $median |
+| Done / timeout / parked / lane-unusable | $hist |
+| Card count (done/) | $card_n |
+| Reviewer findings (CRIT/MAJ/MIN) | |
+| Orchestrator interventions | |
+| Incidents | |
+| Quota consumed | |
+
+**Lane scorecards** (spec-08 anchors: 1 unusable · 2 needed rescue · 3 did the job · 4 beats
+cost peers · 5 promote): _(fill in)_
+
+**What slowed the swarm down:** _(fill in)_
+
+**Next-run change:** _(fill in)_
+TEMPLATE
+}
+
+verb="${1:-}"
+[[ $# -ge 1 ]] || usage
+shift
+
+case "$verb" in
+  pause) cmd_pause ;;
+  resume) cmd_resume ;;
+  cancel) [[ $# -ge 1 ]] || usage; cmd_cancel "$1" ;;
+  add) [[ $# -ge 1 ]] || usage; cmd_add "$@" ;;
+  abort) cmd_abort ;;
+  status) cmd_status ;;
+  kill) [[ $# -ge 1 ]] || usage; cmd_kill "$@" ;;
+  nudge) [[ $# -ge 1 ]] || usage; cmd_nudge "$@" ;;
+  unpark) [[ $# -ge 1 ]] || usage; cmd_unpark "$@" ;;
+  pause-worker) [[ $# -ge 1 ]] || usage; cmd_pause_worker "$1" ;;
+  resume-worker) [[ $# -ge 1 ]] || usage; cmd_resume_worker "$1" ;;
+  heartbeat) cmd_heartbeat "${1:-}" ;;
+  watchdog-arm) cmd_watchdog_arm "${1:-}" ;;
+  watchdog-check) cmd_watchdog_check "${1:-}" ;;
+  watchdog-disarm) cmd_watchdog_disarm "${1:-}" ;;
+  report) cmd_report "$@" ;;
+  postmortem) cmd_postmortem "${1:-}" ;;
+  review-stub) cmd_review_stub "${1:-}" ;;
+  *) usage ;;
+esac

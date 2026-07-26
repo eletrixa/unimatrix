@@ -1,0 +1,41 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.env.all
+.bus/
+temp/
+dist/
+*.log
+*.local.md
+.DS_Store
+Thumbs.db
+
+# third-party generated skill (reinstall: npx uipro-cli init --ai claude)
+.claude/skills/ui-ux-pro-max/
+.playwright-cli/
+
+# stray root-level worker logs (real ones live under .bus/, which is ignored)
+/run-*.jsonl
+.bus-*/
+
+# operator-local config + run evidence — public users cp swarm.conf.example -> swarm.conf.
+# (.pii-allowlist stays TRACKED — do not ignore it.)
+swarm.conf
+docs/ops/llm-runs.md
+docs/ops/run-reviews.md
+docs/ops/speedwars.jsonl
+docs/ops/history-rewrites.md
+# ledger write lock (_ledger_append_row's flock sidecar) — operator-local, never distributed
+*.md.lock
+.playwright-mcp/
+# bus archives (bus_archive, src/swarm-lib.sh) — raw worker evidence incl. answer text; NEVER
+# committed (CLAUDE.md §Git). Only the layout README is tracked, so the glob replaces the old
+# whole-directory ignore rather than relaxing it.
+docs/ops/bus-archives/*
+!docs/ops/bus-archives/README.md
+# `unimatrix report --html` output — a rendering of the gitignored ledger
+docs/ops/report-*.html
+# stray tool caches (nothing in this repo runs pytest/ruff — they appear when a worker strays)
+.pytest_cache/
+.ruff_cache/

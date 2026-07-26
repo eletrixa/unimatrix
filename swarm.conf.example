@@ -1,0 +1,62 @@
+# swarm.conf — bash-sourceable KEY=VALUE. Precedence: env > this file > baked default.
+# Full semantics: specs/04-settings.md. Copy to swarm.conf and edit in place, or use
+# `/swarm config <key> <value>`.
+#
+# Secrets: workers grep the individual key(s) they need from $ENV_MASTER_FILE at spawn
+# under `env -i` — never source it wholesale. ENV_MASTER_FILE defaults to
+# ${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix/env.master.
+
+PLAN=fable                            # decomposition/spec-writing role — never spawned
+ORCHESTRATOR=fable                    # gate/adjudicate/steer/synthesize role — never spawned
+REVIEW=codex:default                  # audit/verify role; must differ from the active exec lane
+EXEC_CHAIN="claude:haiku codex:default" # space-separated lane:model fallback chain, left to right
+CLASS_REVIEW="codex kimi"              # space-separated bare lanes for same-class-first review fallback (spec 10 FR-R1)
+CLASS_EXEC="grok glm"                  # space-separated bare lanes for same-class-first exec fallback (spec 10 FR-R1)
+REVIEW_CHAIN=""                        # optional override for derived judge chain; empty = derive from CLASS_REVIEW (spec 10 FR-R2)
+PIN_WAIT_SEC=120                       # bounded wait before a blocked pinned spec parks, in seconds (spec 10 FR-R6)
+PLAN_CHAIN="fable codex kimi"          # spec 11 succession ladder for the PLAN seat; first token must be fable
+ORCH_CHAIN="fable kimi"                # spec 11 succession ladder for the ORCHESTRATOR seat; walked by the takeover watchdog
+ORCH_TAKEOVER_MIN=20                   # heartbeat staleness (minutes) before swarm-ctl watchdog-check seats a continuation driver
+MAX_ITERATIONS=10                     # /swarm-loop iteration cap
+BUDGET_USD=0                          # loop/run budget cap in USD; 0 = no cap; also gates fallback INTO kimi (real-PAYG) — spec 10
+PAYG_FALLBACK=warn                    # warn|allow|deny: gates a FALLBACK hop onto kimi (real-$) while BUDGET_USD=0 (uncapped) — spec 13 FR-4. warn = proceed + loud stderr + fbreason evidence (default); deny = route around kimi like any blocked lane; allow = today's behavior, silent
+FANOUT=4                              # job-pool concurrency ceiling
+LEASE_MIN=15                          # stale-lease reclaim threshold, in minutes
+WORKER_TIMEOUT_SEC=300                # FR-12 wall-clock watchdog: kill a hung worker after this long
+MAX_LANE_RETRIES=3                    # consecutive unusable-answer retries per lane before failing over (parks when pinned/chain exhausted); bounds FR-6's retry-same-lane
+CAGE_DENY_MAX=0                       # spec 14 FR-1: read-class permission denials (Read/Glob/Grep/NotebookRead) a card may take before it PARKS as cage-denied instead of walking its chain into the same cage. A ceiling, not a toggle — raise it for a run that knowingly cages out a few reads; absurdly high is the opt-out. Bash denials are never counted (a write cage denies Bash by design)
+
+# Per-lane watchdog overrides (spec 04 §Amendment 2026-07-25 FR-C). Empty/unset = fall back to
+# WORKER_TIMEOUT_SEC above; set one only for a lane that genuinely needs a different ceiling.
+# These also set reap's liveness-guard age cap (spec 01 Amendment FR-A): a claim is protected by
+# live-pid/fresh-run-log evidence for LEASE_MIN + 2x the resolved timeout above; past that, the
+# evidence is treated as pid-reuse and the claim is reaped regardless.
+# The values below are docs/larger-swarms.md finding C3's measured suggestions, left COMMENTED on
+# purpose: uncommenting them multiplies the effective timeout 4-8x, and this is the one knob whose
+# whole job is bounding runaway spend.
+#TIMEOUT_GLM=1200                     # glm: slow first token, long tool loops
+#TIMEOUT_CODEX=2400                   # codex: review/audit cards routinely outrun 300s
+#TIMEOUT_CLAUDE=1200
+#TIMEOUT_GROK=900
+#TIMEOUT_GEMINI=                      # no measured need yet — leave empty
+#TIMEOUT_KIMI=                        # WARNING: kimi is real-PAYG. A longer timeout here widens the
+                                      # real-dollar exposure of every hung card on this lane, unlike
+                                      # the subscription lanes where a hang costs only wall clock.
+VERIFY_MAP="claude:codex codex:kimi gemini:claude glm:codex grok:codex kimi:codex"  # verify-wave rotation (gen:verifier); judge != executor, always. codex and kimi are mutual review-pair fallbacks: if either's mapped verifier is limited, review hands off to the other (unless that would seat the generator as its own judge, or both are limited — then the pin parks loudly)
+LEDGER_AUTO=1                         # auto-append a docs/ops/llm-runs.md row on every successful branch finalize
+FEEDBACK_AUTO=1                       # auto-draft feedback/*-auto-<class>.md stubs (status: draft) at run close — spec 12 FR-4
+GEMINI_SANDBOX=                       # FR-16: "docker" runs the gemini lane in unimatrix-gemini-lane (docker/gemini-lane.Dockerfile), no host mounts; empty = today's unsandboxed lane
+MON_PORT=4747                         # specs/05-ground-control.md: web cockpit port (gc unit svc-unimatrix, health_url uses this)
+MON_AUTOOPEN=1                        # specs/05-ground-control.md: auto-ensure + auto-open the web cockpit on the first swarm of a bus; 0 disables both
+GLM_MAX_THINKING_TOKENS=6000          # backlog-31 (2026-07-25): cap GLM thinking-token flood; 0 = disable thinking. Now a real conf_load
+                                       # key (env > file > default, like every other key here) — was excluded before, which backwards the
+                                       # precedence instead of protecting it. See rules/unimatrix/model-lanes.md, specs/04-settings.md.
+KIMI_MAX_THINKING_TOKENS=6000         # cap kimi thinking-token flood (billed as real $ at $15/M out); 0 = disable thinking
+GROK_EFFORT=medium                    # grok reasoning effort (speed default); empty = restore the CLI's own default (high)
+
+# Optional extra lanes — each needs its own key/auth before you add it to EXEC_CHAIN:
+#   glm:glm-5.2    — set Z_AI_CODING_KEY in $ENV_MASTER_FILE (spawned via a Z.ai child-env swap on `claude -p`)
+#   grok:grok-4.5  — authenticate the grok CLI once via its OAuth flow
+#   gemini:default — set GEMINI_API_KEY in $ENV_MASTER_FILE
+#   kimi:kimi-k3   — set MOONSHOT_API_KEY in $ENV_MASTER_FILE (Moonshot PAYG child-env swap on claude -p; cheaper: kimi:kimi-k2.7-code; REAL dollars, not a subscription pool)
+# Example with all lanes: EXEC_CHAIN="glm:glm-5.2 grok:grok-4.5 kimi:kimi-k3 claude:haiku codex:default"

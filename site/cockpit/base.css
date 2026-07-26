@@ -1,0 +1,243 @@
+/**
+ * Cockpit shell tokens + shared atoms. The design source of truth is the approved Claude Design handoff (plans/002-cockpit-redesign/design/cockpit.dc.html <style> block); this file recreates that rendered output in plain CSS. View modules style ONLY under their own container id.
+ *
+ * Project: unimatrix — multi-model swarm orchestrator driven from Claude Code
+ * Module:  site/cockpit/base.css
+ * Deps:    self-hosted Share Tech Mono (/assets/fonts/share-tech-mono.woff2); no external CSS/fonts
+ * Tested:  tests/ground-control.bats (server serves it); playwright Lane-A QA (plan §5.5)
+ *
+ * Key responsibilities:
+ * - :root design tokens (plan §1.1) + the design's body/grid/scrollbar/selection/keyframes VERBATIM.
+ * - Shell layout: min-width 1280px, 100vh column flex, page never scrolls (inner views/rails do).
+ * - Header chrome + tabs (active = green text + 2px green bottom border) + status strip skeleton.
+ * - Shared atoms reused across views: .btn-ctl .chip .badge .lane-tag .bar .dot, blink/rise frames.
+ * - Toast, native <dialog>, degrade #notice, and the overlay drawer shells.
+ *
+ * Design constraints:
+ * - Colors/fonts are the design's literal values — do not "theme" them. grok lane #f0abfc is
+ *   distinct from semantic red #f97066 / amber #e0b34a (FR-16).
+ * - Each view's CSS owns ONLY its own container (#view-ops/#view-grid/#view-flight/#view-fire/
+ *   #agent-drawer/#settings-drawer). Nothing view-specific lives here.
+ */
+
+/* --- self-hosted font (no CDN: no external request, no console error on the local deploy) ------- */
+@font-face {
+  font-family: 'Share Tech Mono';
+  src: url('/assets/fonts/share-tech-mono.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* --- design tokens (plan §1.1) ---------------------------------------------------------------- */
+:root {
+  --bg: #070b09;
+  --panel: #0c120e;
+  --inset: #101812;
+  --log-bg: #050807;
+  --text: #e6f1ea;
+  --dim: #93a89c;
+  --accent: #34d399;
+  --accent-hover: #4ae0a8;
+  --accent-dark: #1d8a63;
+  --accent-ink: #052e1e;
+  --amber: #e0b34a;
+  --red: #f97066;
+  --blue: #7dd3fc;
+  --purple: #c084fc;
+  --line: rgba(94, 234, 166, 0.13);
+  --line-strong: rgba(94, 234, 166, 0.28);
+  --amber-line: rgba(224, 179, 74, 0.4);
+  --amber-line-strong: rgba(224, 179, 74, 0.5);
+  --red-line: rgba(249, 112, 102, 0.4);
+  --red-line-strong: rgba(249, 112, 102, 0.5);
+  --font: 'Share Tech Mono', ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace;
+}
+
+/* --- reset + page + grid overlay + scrollbar + selection + keyframes (design VERBATIM) --------- */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.45;
+  min-width: 1280px;
+  overflow: hidden;                 /* the shell is fixed to the viewport; inner views/rails scroll */
+  display: flex;
+  flex-direction: column;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image:
+    linear-gradient(rgba(94, 234, 166, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(94, 234, 166, 0.04) 1px, transparent 1px);
+  background-size: 56px 56px;
+  -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, #000 30%, transparent 75%);
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, #000 30%, transparent 75%);
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); text-decoration: underline; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--inset); border: 1px solid var(--line); border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+@keyframes blink { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* --- shell layout ----------------------------------------------------------------------------- */
+.shell { position: relative; z-index: 1; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.views { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+.view { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.view[hidden] { display: none; }
+
+/* --- header (52px, always visible) ------------------------------------------------------------- */
+#hdr {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  height: 52px;
+  padding: 0 18px;
+  background: rgba(7, 11, 9, 0.85);
+  border-bottom: 1px solid var(--line-strong);
+}
+.hdr-brand { display: flex; align-items: baseline; gap: 9px; flex: none; }
+.brand-name { font-size: 15px; letter-spacing: 0.06em; }
+.brand-badge { font-size: 10px; letter-spacing: 0.22em; color: var(--accent); text-transform: uppercase; }
+#hdr-tabs { display: flex; gap: 4px; height: 100%; flex: none; }
+#hdr-tabs .tab {
+  display: flex; align-items: center; padding: 0 16px; cursor: pointer;
+  font-family: var(--font); font-size: 12px; letter-spacing: 0.1em;
+  color: var(--dim); background: none; border: none; border-bottom: 2px solid transparent;
+}
+#hdr-tabs .tab:hover { color: var(--text); }
+#hdr-tabs .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.hdr-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+#hdr-run { color: var(--dim); font-size: 11px; white-space: nowrap; max-width: 38ch; overflow: hidden; text-overflow: ellipsis; }
+#hdr-run b { color: var(--text); font-weight: 400; }
+#hdr-hint { color: var(--accent-dark); font-size: 10px; white-space: nowrap; }
+
+/* --- SSE-health dot --------------------------------------------------------------------------- */
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--dim); flex: none; }
+.dot.live { background: var(--accent); box-shadow: 0 0 6px var(--accent); animation: blink 2s ease-in-out infinite; }
+.dot.reconnect { background: var(--amber); }
+.dot.degraded { background: var(--red); }
+
+/* --- shared control button (.btn-ctl) --------------------------------------------------------- */
+.btn-ctl {
+  font-family: var(--font); font-size: 11px; letter-spacing: 0.05em; cursor: pointer;
+  background: var(--inset); color: var(--text); border: 1px solid var(--line-strong);
+  border-radius: 4px; padding: 5px 12px; white-space: nowrap;
+}
+.btn-ctl:hover { border-color: var(--accent); color: var(--accent); }
+.btn-ctl.on { color: var(--accent); border-color: var(--accent); }
+.btn-ctl.abort { color: var(--red); border-color: var(--red-line); }
+.btn-ctl.abort:hover { background: rgba(249, 112, 102, 0.12); border-color: var(--red); color: var(--red); }
+.btn-ctl.abort.armed { background: var(--red); color: var(--accent-ink); border-color: var(--red); }
+
+/* --- status strip ----------------------------------------------------------------------------- */
+#strip {
+  flex: none; display: flex; align-items: center; gap: 6px 18px; flex-wrap: wrap;
+  padding: 8px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+#strip > span { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+#st-burn { margin-left: auto; }
+
+/* .chip — a count/label pair; <b> is the number. ok/warn/err/blocked variants. */
+.chip { display: inline-flex; gap: 5px; align-items: baseline; color: var(--dim); }
+.chip b { color: var(--text); font-weight: 400; }
+.chip.ok b { color: var(--accent); }
+.chip.warn { color: var(--amber); }
+.chip.warn b { color: var(--amber); }
+.chip.err { color: var(--red); }
+.chip.err b { color: var(--red); }
+.chip.blocked { color: var(--amber); border: 1px solid var(--amber-line-strong); border-radius: 4px; padding: 0 8px; }
+
+/* .bar — a thin segmented/mono fill (gate = green+amber; budget = mono colored). */
+.bar { display: inline-flex; height: 7px; border: 1px solid var(--line-strong); border-radius: 4px; overflow: hidden; vertical-align: middle; background: var(--log-bg); }
+.bar > i { display: block; height: 100%; }
+.bar-gate { width: 110px; }
+.bar-budget { width: 90px; }
+
+/* .lane-tag — a letter chip in the lane color (burn per-lane, tile lane chips, verify letters). */
+.lane-tag { display: inline-flex; align-items: baseline; gap: 4px; font-size: 11px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 3px; }
+/* .badge — a small uppercase pill (state/badge text). Views set bg/color inline by class. */
+.badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; background: var(--inset); color: var(--dim); }
+
+/* Badge color atoms — shared by firehose.css (.fh-badge) and drawer.css (.ad-ev-badge); each
+   element carries both a shape class and one of these color classes (e.g. "fh-badge b-green").
+   Same values as the design's B{} palette — do not fork a second copy per view. */
+.b-green, .b-claim-green { background: rgba(52, 211, 153, 0.15); color: var(--accent); }
+.b-red { background: rgba(249, 112, 102, 0.18); color: var(--red); }
+.b-blue { background: rgba(125, 211, 252, 0.18); color: var(--blue); }
+.b-dim, .b-claim { background: rgba(147, 168, 156, 0.14); color: var(--dim); }
+.b-amber { background: rgba(147, 168, 156, 0.14); color: var(--amber); }
+
+/* --- toast (bottom-right, z-60, rise entry) --------------------------------------------------- */
+.toast {
+  position: fixed; right: 18px; bottom: 18px; z-index: 60;
+  background: var(--inset); border: 1px solid var(--accent); border-radius: 6px;
+  padding: 9px 14px; font-size: 11.5px; color: var(--text); max-width: 46ch;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6); animation: rise 0.18s ease-out;
+}
+.toast[hidden] { display: none; }
+.toast-glyph { color: var(--accent); }
+.toast-pending { border-color: var(--amber); }
+.toast-pending .toast-glyph { color: var(--amber); }
+.toast-fail { border-color: var(--red); }
+.toast-fail .toast-glyph { color: var(--red); }
+
+/* --- overlay drawers (agent + settings) ------------------------------------------------------- */
+.drawer[hidden] { display: none; }
+#agent-drawer {
+  position: fixed; top: 96px; right: 0; bottom: 0; width: 352px; z-index: 40;
+  background: var(--panel); border-left: 1px solid var(--line-strong);
+  display: flex; flex-direction: column; box-shadow: -14px 0 34px rgba(0, 0, 0, 0.5);
+}
+#settings-drawer {
+  position: fixed; top: 96px; right: 0; bottom: 0; width: 420px; z-index: 40;
+  background: var(--panel); border-left: 1px solid var(--line-strong);
+  display: flex; flex-direction: column; box-shadow: -14px 0 34px rgba(0, 0, 0, 0.5);
+  overflow: auto;
+}
+
+/* --- native <dialog> (ADD SPEC) --------------------------------------------------------------- */
+dialog.add-dialog {
+  background: var(--panel); color: var(--text); border: 1px solid var(--accent-dark);
+  border-radius: 6px; padding: 0; max-width: 520px; width: 80vw;
+}
+dialog.add-dialog::backdrop { background: rgba(7, 11, 9, 0.78); }
+.add-dialog form { display: flex; flex-direction: column; gap: 11px; padding: 16px 18px; }
+.add-dialog .dlg-title { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent); }
+.add-dialog .dlg-row { display: flex; flex-direction: column; gap: 4px; }
+.add-dialog .dlg-grow { flex: 1; min-height: 0; }
+.add-dialog label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); }
+.add-dialog input, .add-dialog textarea, .add-dialog select {
+  font-family: var(--font); font-size: 12px; background: var(--inset); color: var(--text);
+  border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px;
+}
+.add-dialog textarea { resize: vertical; min-height: 120px; }
+.add-dialog .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.add-dialog .btn-ctl.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.add-dialog .btn-ctl.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--accent-ink); }
+
+/* --- degrade notice (local-only; legacy wording) ---------------------------------------------- */
+.notice { margin: 48px auto; padding: 40px; text-align: center; max-width: 640px; }
+.notice[hidden] { display: none; }
+.notice h2 { font-size: 1.4rem; color: var(--accent); margin-bottom: 12px; }
+.notice p { color: var(--text); max-width: 52ch; margin: 0 auto 20px; line-height: 1.7; }
+.notice code { font-family: var(--font); background: var(--inset); padding: 1px 6px; border-radius: 3px; color: var(--accent); }
+.notice .btn-ctl.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.notice .btn-ctl.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--accent-ink); }
+
+/* --- hidden helper ---------------------------------------------------------------------------- */
+[hidden] { display: none !important; }

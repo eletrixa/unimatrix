@@ -1,0 +1,10 @@
+{
+  "name": "unimatrix",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Multi-model agent orchestration (/swarm, /swarm-loop) — headless CLI workers over a JSONL file-bus, no MCP",
+  "scripts": {
+    "test": "bats tests/",
+    "lint": "shellcheck -x unimatrix swarm-run.sh swarm-loop.sh swarm-mon.sh src/swarm-lib.sh src/swarm-ctl check.sh plugin/gen-commands.sh"
+  }
+}

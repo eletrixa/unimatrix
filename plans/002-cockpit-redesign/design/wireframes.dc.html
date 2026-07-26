@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#f0eee9;font-family:system-ui,sans-serif;color:#1c1b18}
+a{color:#2a6fc2}a:hover{color:#1a5cb0}
+.dv-turn{padding:40px 44px 32px;border-bottom:1px solid rgba(0,0,0,.08);scroll-margin-top:16px}
+.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 14px}
+.dv-tid{font:600 10px ui-monospace,Menlo,monospace;padding:3px 7px;background:#1a1a1a;color:#fff;border-radius:4px;text-decoration:none}
+.dv-tname{font:600 13px/1.2 system-ui,sans-serif;color:#1a1a1a}
+.dv-opts{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start}
+.dv-opt{flex:none;display:flex;flex-direction:column;gap:9px;scroll-margin-top:16px}
+.dv-oid{font:600 10.5px ui-monospace,Menlo,monospace;padding:3px 7px;background:rgba(0,0,0,.08);color:#1a1a1a;border-radius:5px;text-decoration:none}
+.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 11px/1.3 system-ui,sans-serif;color:rgba(0,0,0,.55)}
+.dv-card{max-width:100%;background:#fff;border:1.5px solid #1c1b18;border-radius:8px;box-shadow:3px 3px 0 rgba(28,27,24,.18);overflow:hidden}
+.dv-opt:target .dv-oid{background:#2a78d6;color:#fff}
+.dv-next{margin:22px 0 0;font:12px/1.5 system-ui,sans-serif;color:rgba(0,0,0,.5)}
+.hand{font-family:'Patrick Hand',cursive}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.wn{font-family:'Patrick Hand',cursive;font-size:13.5px;line-height:1.2;color:#4a473f}
+.red{color:#c4402e}.amb{color:#b8860b}.grn{color:#3d8a5c}.blu{color:#2a6fc2}.dim{color:#9b968c}
+.wf{background:#fff;border:1.5px solid #1c1b18;border-radius:8px}
+.chip{display:inline-flex;align-items:center;gap:5px;border:1.5px solid #1c1b18;border-radius:999px;padding:2px 9px;font:12px ui-monospace,Menlo,monospace;background:#fff;white-space:nowrap}
+.btn{display:inline-block;border:1.5px solid #1c1b18;border-radius:6px;padding:2px 8px;font:600 11px ui-monospace,Menlo,monospace;background:#fff;box-shadow:2px 2px 0 #1c1b18;white-space:nowrap}
+.lb{display:inline-flex;width:17px;height:17px;border:1.5px solid #1c1b18;border-radius:4px;align-items:center;justify-content:center;font:700 10px ui-monospace,monospace;background:#fff;flex:none}
+.hatch{background:repeating-linear-gradient(45deg,transparent 0 4px,rgba(28,27,24,.14) 4px 8px)}
+.ct{font-family:'Patrick Hand',cursive;font-size:18px;font-weight:700;letter-spacing:.5px}
+.bar{position:absolute;height:11px;top:3px;border-radius:3px}
+.dot{position:absolute;width:6px;height:6px;border-radius:50%;top:5.5px}
+.frow{display:flex;gap:6px;align-items:baseline;font:10.5px ui-monospace,Menlo,monospace;padding:2px 0;border-bottom:1px dashed #ddd8cc}
+.no-notes .wn{display:none!important}
+</style>
+</helmet>
+<section class="dv-turn" id="t2">
+<div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Merge: <a class="dv-oid" href="#1d">1d</a> Status Wall + <a class="dv-oid" href="#1e">1e</a> Plumbing as one wireframe</span></div>
+<div class="dv-opts">
+<div class="dv-opt" id="2a" data-screen-label="2a Ops wall — verdict + plumbing">
+<div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a>Ops wall — glance verdict on top, live pipeline as the body</div>
+<div class="dv-card" style="width:1240px">
+<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-bottom:1.5px solid #1c1b18"><span class="ct">OPS WALL</span><span class="mono dim" style="font-size:11px">unimatrix · run r-0719 · always-on second monitor</span></div>
+<div style="display:flex;gap:18px;align-items:center;padding:14px 22px;border-bottom:1.5px dashed #1c1b18">
+<div style="flex:none"><div class="hand" style="font-size:40px;font-weight:700;line-height:1;color:#b8860b">⚠ 3 NEED ATTENTION</div><div class="mono" style="font-size:12.5px;margin-top:5px">39 running · 5 queued · <b>31/50 done</b> · $4.20/$10 · est ~18m left</div><div class="mono" style="font-size:11px;margin-top:3px">burn $0.42/min = <span class="lb" style="width:12px;height:12px;font-size:8px">C</span> $0.18 · <span class="lb" style="width:12px;height:12px;font-size:8px">X</span> $0.13 · <span class="lb" style="width:12px;height:12px;font-size:8px">G</span> $0.07 · <span class="lb" style="width:12px;height:12px;font-size:8px">Z</span> $0.04</div></div>
+<div style="flex:1;display:flex;gap:8px">
+<div class="wf" style="flex:1;border-width:2px;border-color:#c4402e;padding:7px 10px"><div class="mono" style="font-size:14px;font-weight:700">b-23 <span class="red">✕ err ×3</span></div><div class="mono dim" style="font-size:10px;margin:1px 0 6px">glm ETIMEDOUT → retry</div><span class="btn" style="font-size:10px">KILL + CANCEL</span></div>
+<div class="wf" style="flex:1;border-width:2px;border-color:#b8860b;padding:7px 10px"><div class="mono" style="font-size:14px;font-weight:700">b-17 <span class="amb">silent 14m</span></div><div class="mono dim" style="font-size:10px;margin:1px 0 6px">codex · lease dies in 6m</div><span class="btn" style="font-size:10px">NUDGE NOW</span></div>
+<div class="wf" style="flex:1;border-width:2px;border-color:#b8860b;padding:7px 10px"><div class="mono" style="font-size:14px;font-weight:700">BUDGET 42%</div><div class="mono dim" style="font-size:10px;margin:1px 0 6px">on pace to hit $10</div><span class="btn" style="font-size:10px">PAUSE QUEUE</span></div>
+</div>
+</div>
+<div style="display:flex;gap:6px;align-items:center;padding:14px 12px 8px;overflow-x:auto">
+<div class="wf" style="padding:9px 11px;text-align:center;flex:none"><div class="mono" style="font-weight:700;font-size:12px">SPECS</div><div class="hand" style="font-size:22px">50</div></div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div style="flex:none;text-align:center"><div class="wf" style="padding:9px 11px"><div class="mono" style="font-weight:700;font-size:12px">QUEUE</div><div class="hand" style="font-size:22px">5</div></div><div class="chip" style="margin-top:5px;font-size:10px">‖ PAUSE valve</div></div>
+<div style="flex:none;display:flex;flex-direction:column;align-items:center;gap:1px"><div class="wn" style="transform:rotate(-2deg);white-space:nowrap;line-height:1">atomic<br>rename<br>= claim</div><span class="mono" style="font-size:16px">→</span></div>
+<div style="flex:none;display:flex;flex-direction:column;gap:6px">
+<div class="wf" style="display:flex;gap:8px;align-items:center;padding:6px 10px"><span class="lb">C</span><span class="mono" style="font-size:11px;font-weight:700">claude ×12</span><span class="mono blu" style="font-size:10px">▂▃▅▃</span><span class="mono dim" style="font-size:10px">$0.18/min</span></div>
+<div class="wf" style="display:flex;gap:8px;align-items:center;padding:6px 10px;border-color:#b8860b"><span class="lb">X</span><span class="mono" style="font-size:11px;font-weight:700">codex ×10</span><span class="mono blu" style="font-size:10px">▃▅▂▁</span><span class="mono amb" style="font-size:10px;font-weight:700">⚠ b-17</span></div>
+<div class="wf" style="display:flex;gap:8px;align-items:center;padding:6px 10px"><span class="lb">G</span><span class="mono" style="font-size:11px;font-weight:700">gemini ×8</span><span class="mono blu" style="font-size:10px">▅▆▅▃</span><span class="mono dim" style="font-size:10px">$0.07/min</span></div>
+<div class="wf" style="display:flex;gap:8px;align-items:center;padding:6px 10px;border-color:#c4402e"><span class="lb">Z</span><span class="mono" style="font-size:11px;font-weight:700">glm ×9</span><span class="mono blu" style="font-size:10px">▂▁▃▂</span><span class="chip" style="font-size:9px;padding:0 5px;border-color:#c4402e;color:#c4402e">.limited</span></div>
+</div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div class="wf" style="padding:9px 11px;text-align:center;flex:none;border-style:dashed"><div class="mono" style="font-weight:700;font-size:12px">HANDOFF</div><div class="mono" style="font-size:11px">res-*.txt</div></div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div class="wf" style="padding:9px 11px;text-align:center;flex:none;border-color:#3d8a5c;border-width:2px"><div class="mono" style="font-weight:700;font-size:12px">DONE</div><div class="hand grn" style="font-size:22px">31</div></div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div class="wf" style="padding:9px 11px;text-align:center;flex:none;transform:rotate(-1deg)"><div class="mono" style="font-weight:700;font-size:12px">GATE</div><div class="hand" style="font-size:13px">done+parked ≥ live?</div><div class="mono amb" style="font-size:10px;font-weight:700">33/50</div></div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div class="wf hatch" style="padding:9px 11px;text-align:center;flex:none"><div class="mono" style="font-weight:700;font-size:12px;background:#fff;padding:0 4px">VERIFY</div><div class="mono" style="font-size:10px;background:#fff;padding:0 4px">C→X X→G G→Z Z→C</div></div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div class="wf" style="padding:9px 11px;text-align:center;flex:none"><div class="mono" style="font-weight:700;font-size:12px">SYNTH</div><div class="mono dim" style="font-size:10px">Fable</div></div>
+</div>
+<div style="display:flex;gap:10px;padding:2px 16px 8px;margin-left:120px">
+<div style="border:1.5px dashed #b8860b;border-radius:6px;padding:3px 10px;font-size:12px;white-space:nowrap" class="mono amb">▣ PARKED 2</div>
+<div style="border:1.5px dashed #9b968c;border-radius:6px;padding:3px 10px;font-size:12px;white-space:nowrap" class="mono dim">⊘ CANCELLED 1</div>
+<div style="border:1.5px dashed #9b968c;border-radius:6px;padding:3px 10px;font-size:12px;white-space:nowrap" class="mono dim">↻ reaper requeues dead leases</div>
+</div>
+<div style="display:flex;gap:22px;padding:8px 22px 6px;border-top:1.5px dashed #1c1b18;align-items:flex-start">
+<div style="flex:1"><div class="hand" style="font-size:13px;margin-bottom:4px">all 50 agents — age since last event</div>
+<div style="display:flex;flex-wrap:wrap;gap:3px">
+<sc-for list="{{ heat }}" as="h" hint-placeholder-count="20">
+<span title="{{h.t}}" style="width:14px;height:14px;border:1px solid #1c1b18;border-radius:3px;background:{{h.hc}}"></span>
+</sc-for>
+</div>
+<div class="mono dim" style="font-size:10px;margin-top:3px"><span class="grn">■ fresh</span> → <span class="amb">■ aging</span> → <span class="red">■ stuck</span> · ■ done · □ queued</div></div>
+<div style="width:380px;flex:none"><div class="hand" style="font-size:13px;margin-bottom:4px">gate progress</div>
+<div style="height:18px;border:1.5px solid #1c1b18;border-radius:6px;overflow:hidden;display:flex"><div style="width:62%;background:#3d8a5c"></div><div class="hatch" style="width:4%"></div><div style="flex:1;background:#fff"></div></div>
+<div class="mono dim" style="font-size:10px;margin-top:3px">31 done + 2 parked / 50 — verify unlocks at 100%</div></div>
+</div>
+<div class="wn" style="padding:4px 22px 14px">one screen: verdict + alerts answer "anything wrong?", pipeline shows WHERE it's wrong (bulges, .limited, silent lane), heat strip shows WHO. Click anything → <a class="dv-oid" href="#1a">1a</a> drawer</div>
+</div>
+</div>
+</div>
+<p class="dv-next">Try next: "take <a class="dv-oid" href="#2a">2a</a> hi-fi in the dark site theme" · "swap the heat strip for <a class="dv-oid" href="#1a">1a</a>'s tile grid" · "add <a class="dv-oid" href="#1c">1c</a> timeline as a second tab"</p>
+</section>
+<section class="dv-turn" id="t1">
+<div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Unimatrix cockpit — five ways to watch a 50-agent swarm</span></div>
+<div class="wf" style="display:flex;flex-wrap:wrap;gap:6px 22px;align-items:baseline;padding:9px 14px;margin:0 0 20px;border-style:dashed">
+<span class="hand" style="font-weight:700;font-size:14px">SHARED SYSTEM (from repo + research)</span>
+<span class="wn"><b>signals:</b> age since last event = THE stuck detector · tok/$ vs <span class="mono">BUDGET_USD</span> · errors/retries (<span class="mono">MAX_LANE_RETRIES</span>) · pulse = tool-calls/min</span>
+<span class="wn"><b>thresholds from</b> <span class="mono">swarm.conf</span> (<span class="mono">LEASE_MIN</span>…), not magic numbers</span>
+<span class="wn"><b>controls:</b> swarm-ctl verbs exist (pause/cancel/kill/add/abort) — web needs one new <span class="mono">POST /api/ctl</span></span>
+<span class="wn"><b>firehose survives</b> as the drill-in drawer in every option, scoped per agent</span>
+</div>
+<div class="dv-opts">
+
+<div class="dv-opt" id="1a" data-screen-label="1a Mission-control grid">
+<div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>Mission-control grid — 50 tiles + triage rail + drill-in drawer</div>
+<div class="dv-card" style="width:1150px">
+<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-bottom:1.5px solid #1c1b18"><span class="ct">MISSION CONTROL</span><span class="mono dim" style="font-size:11px">unimatrix · run r-0719 · /swarm-loop iter 3/12</span></div>
+<div style="display:flex;gap:8px;align-items:center;padding:8px 14px;border-bottom:1.5px dashed #1c1b18;flex-wrap:wrap">
+<span class="chip">GATE 31+2/50 <span style="display:inline-block;width:80px;height:8px;border:1px solid #1c1b18;border-radius:4px;overflow:hidden"><span style="display:block;width:62%;height:100%;background:#1c1b18"></span></span></span>
+<span class="chip">$4.20 / $10 <span class="dim">42%</span></span>
+<span class="chip blu">burn $0.42/min ▂▃▅▃</span>
+<span class="chip" style="gap:8px"><span class="lb" style="width:13px;height:13px;font-size:8px">C</span>$0.18<span class="lb" style="width:13px;height:13px;font-size:8px">X</span>$0.13<span class="lb" style="width:13px;height:13px;font-size:8px">G</span>$0.07<span class="lb" style="width:13px;height:13px;font-size:8px">Z</span>$0.04<span class="dim">/min</span></span>
+<span class="chip" style="border-color:#b8860b;color:#b8860b">⚠ 2 stale</span>
+<span class="chip" style="border-color:#c4402e;color:#c4402e">✕ 1 erroring</span>
+<span style="flex:1"></span>
+<span class="btn">‖ PAUSE ALL</span><span class="btn">+ ADD SPEC</span><span class="btn" style="color:#c4402e;border-color:#c4402e;box-shadow:2px 2px 0 #c4402e">ABORT</span>
+</div>
+<div style="display:flex;gap:0;align-items:stretch">
+<div style="width:238px;flex:none;border-right:1.5px dashed #1c1b18;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+<span class="hand" style="font-weight:700;font-size:15px">NEEDS ATTENTION (3)</span>
+<div class="wf" style="border-color:#c4402e;border-width:2px;padding:7px 9px">
+<div class="mono" style="font-size:12px;font-weight:700">b-23 <span class="lb" style="width:14px;height:14px;font-size:9px">Z</span> <span class="red">error ×3</span></div>
+<div class="mono dim" style="font-size:10.5px;margin:2px 0 5px">ETIMEDOUT → chain retry on codex</div>
+<div style="display:flex;gap:5px"><span class="btn">KILL</span><span class="btn">CANCEL</span></div>
+</div>
+<div class="wf" style="border-color:#b8860b;border-width:2px;padding:7px 9px">
+<div class="mono" style="font-size:12px;font-weight:700">b-17 <span class="lb" style="width:14px;height:14px;font-size:9px">X</span> <span class="amb">silent 14m</span></div>
+<div class="mono dim" style="font-size:10.5px;margin:2px 0 5px">lease 20m — claimed, no events</div>
+<div style="display:flex;gap:5px"><span class="btn">NUDGE</span><span class="btn">KILL</span></div>
+</div>
+<div class="wf" style="border-color:#b8860b;padding:7px 9px">
+<div class="mono" style="font-size:12px;font-weight:700">b-41 <span class="lb" style="width:14px;height:14px;font-size:9px">Z</span> parked</div>
+<div class="mono dim" style="font-size:10.5px;margin:2px 0 5px">glm lane .limited (rate cap)</div>
+<div style="display:flex;gap:5px"><span class="btn">REQUEUE → C</span></div>
+</div>
+<span class="wn">↑ exceptions float here, ranked by severity — on a second monitor this rail IS the job. NUDGE = kill + requeue with a hint appended</span>
+</div>
+<div style="flex:1;padding:10px 12px;min-width:0">
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(94px,1fr));gap:6px">
+<sc-for list="{{ agents }}" as="a" hint-placeholder-count="12">
+<div style="border:{{a.bw}} solid {{a.bc}};border-radius:6px;background:#fff;padding:4px 6px;opacity:{{a.op}}">
+<div style="display:flex;justify-content:space-between;align-items:center;font:700 10.5px ui-monospace,monospace"><span>{{a.id}}</span><span class="lb" style="width:13px;height:13px;font-size:8px">{{a.lane}}</span></div>
+<div class="mono blu" style="font-size:9px;letter-spacing:1px;margin:1px 0">{{a.pulse}}</div>
+<div style="display:flex;justify-content:space-between;font:10px ui-monospace,monospace;color:#8a8578"><span style="color:{{a.gc}}">{{a.glyph}} {{a.age}}</span><span>{{a.tok}}</span></div>
+</div>
+</sc-for>
+</div>
+<div class="wn" style="margin-top:8px">tile = agent: border color = state · number = age since last event · <span class="blu">▂▅▃ pulse</span> = tool-call rate · done tiles fade + sink to bottom. Sort: trouble first. Click any tile → drawer →</div>
+</div>
+<div style="width:292px;flex:none;border-left:1.5px solid #1c1b18;background:#faf9f5">
+<div style="padding:9px 12px;border-bottom:1.5px solid #1c1b18;display:flex;justify-content:space-between;align-items:center"><span class="mono" style="font-weight:700;font-size:12px">b-17 · codex · claimed 18m</span><span class="mono dim">✕ close</span></div>
+<div style="padding:8px 12px;border-bottom:1px dashed #b8860b;background:#fdf6e3"><span class="hand red" style="font-size:19px;font-weight:700">last event 14m 12s ago</span><br><span class="mono dim" style="font-size:10px">lease expires in 5m 48s → reaper requeues</span></div>
+<div style="display:flex;gap:4px;padding:7px 12px;border-bottom:1px dashed #ccc"><span class="chip" style="background:#1c1b18;color:#fff">events</span><span class="chip">transcript</span><span class="chip">handoff</span><span class="chip">spec</span></div>
+<div style="padding:7px 12px;display:flex;flex-direction:column">
+<div class="frow"><span class="dim">14:02:11</span><span class="blu" style="font-weight:700">tool</span><span>bash: npm test</span></div>
+<div class="frow"><span class="dim">14:02:44</span><span class="dim">res</span><span class="dim">412 lines…</span></div>
+<div class="frow"><span class="dim">14:03:02</span><span class="grn" style="font-weight:700">msg</span><span>"auth tests failing, retr…"</span></div>
+<div class="frow"><span class="dim">14:03:09</span><span class="red" style="font-weight:700">err</span><span class="red">ETIMEDOUT api.anthro…</span></div>
+<div class="frow" style="border:none"><span class="amb" style="font-style:italic">— silence for 14m —</span></div>
+</div>
+<div style="display:flex;gap:6px;padding:9px 12px;border-top:1.5px solid #1c1b18;flex-wrap:wrap"><span class="btn">NUDGE</span><span class="btn">PAUSE</span><span class="btn">KILL</span><span class="btn" style="color:#c4402e;border-color:#c4402e;box-shadow:2px 2px 0 #c4402e">CANCEL</span></div>
+<div class="wn" style="padding:0 12px 10px">the old firehose lives here — scoped to ONE agent. full stream = a tab behind "all events"</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1b" data-screen-label="1b Lane racks">
+<div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>Lane racks — one live column per model, row = agent's latest action</div>
+<div class="dv-card" style="width:1120px">
+<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-bottom:1.5px solid #1c1b18"><span class="ct">LANE RACKS</span><span class="mono dim" style="font-size:11px">what is every agent doing RIGHT NOW</span></div>
+<div style="display:flex;gap:10px;align-items:center;padding:8px 14px;border-bottom:1.5px dashed #1c1b18;flex-wrap:wrap">
+<span class="chip">QUEUE 5</span><span class="mono">→</span><span class="chip" style="font-weight:700">CLAIMED 39</span><span class="mono">→</span><span class="chip grn">DONE 31</span><span class="mono">→</span><span class="chip hatch">VERIFY 8</span>
+<span class="chip dim">parked 2 · cancelled 1</span>
+<span style="flex:1"></span>
+<span class="chip">‖ PAUSE lever <span style="display:inline-block;width:26px;height:12px;border:1.5px solid #1c1b18;border-radius:6px;position:relative"><span style="position:absolute;left:1px;top:1px;width:8px;height:8px;border-radius:50%;background:#1c1b18"></span></span></span>
+</div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:12px 14px">
+<div class="wf" style="padding:0;overflow:hidden">
+<div style="display:flex;gap:6px;align-items:center;padding:6px 9px;border-bottom:1.5px solid #1c1b18;background:#faf9f5"><span class="lb">C</span><span class="mono" style="font-weight:700;font-size:12px">claude</span><span class="mono dim" style="font-size:10px">sonnet · 12 ●</span><span style="flex:1"></span><span class="mono" style="font-size:10px">1.2M · $2.10</span></div>
+<div style="padding:5px 9px">
+<div class="frow"><b>b-03</b><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#4a473f">Edit src/api/routes.ts</span><span class="dim">4s</span></div>
+<div class="frow"><b>b-11</b><span class="blu" style="flex:1;overflow:hidden;white-space:nowrap">tool bash: npm test</span><span class="dim">11s</span></div>
+<div class="frow"><b>b-19</b><span style="flex:1;overflow:hidden;white-space:nowrap;color:#4a473f">thinking… (msg 2m ago)</span><span class="amb">2m</span></div>
+<div class="frow"><b>b-27</b><span style="flex:1;overflow:hidden;white-space:nowrap;color:#4a473f">Write .bus/res-b-27.txt</span><span class="dim">1s</span></div>
+<div class="frow"><b>b-35</b><span class="grn" style="flex:1">result → done/ ✓</span><span class="grn">✓</span></div>
+<div class="frow" style="border:none"><span class="dim">+7 more ↓</span></div>
+</div>
+<div class="mono dim" style="padding:4px 9px;border-top:1px dashed #ccc;font-size:10px">pulse ▂▃▅▃▂ · $0.11/min</div>
+</div>
+<div class="wf" style="padding:0;overflow:hidden">
+<div style="display:flex;gap:6px;align-items:center;padding:6px 9px;border-bottom:1.5px solid #1c1b18;background:#faf9f5"><span class="lb">X</span><span class="mono" style="font-weight:700;font-size:12px">codex</span><span class="mono dim" style="font-size:10px">o4 · 10 ●</span><span style="flex:1"></span><span class="mono" style="font-size:10px">0.9M · $1.35</span></div>
+<div style="padding:5px 9px">
+<div class="frow" style="background:#fdf6e3;border:1.5px solid #b8860b;border-radius:4px;padding:2px 5px"><b>b-17</b><span class="amb" style="flex:1;font-weight:700">⚠ silent 14m / lease 20m</span><span class="btn" style="font-size:9px;padding:1px 5px">NUDGE</span></div>
+<div class="frow"><b>b-05</b><span class="blu" style="flex:1;overflow:hidden;white-space:nowrap">tool apply_patch lib/db.ts</span><span class="dim">2s</span></div>
+<div class="frow"><b>b-13</b><span style="flex:1;overflow:hidden;white-space:nowrap;color:#4a473f">turn.completed · 41k tok</span><span class="dim">55s</span></div>
+<div class="frow"><b>b-21</b><span class="blu" style="flex:1;overflow:hidden;white-space:nowrap">tool bash: bats tests/</span><span class="dim">8s</span></div>
+<div class="frow" style="border:none"><span class="dim">+6 more ↓</span></div>
+</div>
+<div class="mono dim" style="padding:4px 9px;border-top:1px dashed #ccc;font-size:10px">pulse ▃▅▂▁▃ · $0.09/min</div>
+</div>
+<div class="wf" style="padding:0;overflow:hidden">
+<div style="display:flex;gap:6px;align-items:center;padding:6px 9px;border-bottom:1.5px solid #1c1b18;background:#faf9f5"><span class="lb">G</span><span class="mono" style="font-weight:700;font-size:12px">gemini</span><span class="mono dim" style="font-size:10px">read-only · 8 ●</span><span style="flex:1"></span><span class="mono" style="font-size:10px">2.1M · $0.55</span></div>
+<div style="padding:5px 9px">
+<div class="frow"><b>b-07</b><span class="blu" style="flex:1;overflow:hidden;white-space:nowrap">tool web_search "ext4 re…"</span><span class="dim">3s</span></div>
+<div class="frow"><b>b-15</b><span style="flex:1;overflow:hidden;white-space:nowrap;color:#4a473f">reading 12 sources…</span><span class="dim">18s</span></div>
+<div class="frow"><b>b-31</b><span class="grn" style="flex:1">result → done/ ✓</span><span class="grn">✓</span></div>
+<div class="frow"><b>b-39</b><span class="blu" style="flex:1;overflow:hidden;white-space:nowrap">tool fetch docs.docker.…</span><span class="dim">6s</span></div>
+<div class="frow" style="border:none"><span class="dim">+4 more ↓</span></div>
+</div>
+<div class="mono dim" style="padding:4px 9px;border-top:1px dashed #ccc;font-size:10px">pulse ▅▆▅▃▅ · $0.06/min</div>
+</div>
+<div class="wf" style="padding:0;overflow:hidden">
+<div style="display:flex;gap:6px;align-items:center;padding:6px 9px;border-bottom:1.5px solid #1c1b18;background:#faf9f5"><span class="lb">Z</span><span class="mono" style="font-weight:700;font-size:12px">glm</span><span class="mono dim" style="font-size:10px">9 ●</span><span class="chip" style="font-size:9px;padding:0 6px;border-color:#c4402e;color:#c4402e">.limited</span><span style="flex:1"></span><span class="mono" style="font-size:10px">0.7M · $0.20</span></div>
+<div style="padding:5px 9px">
+<div class="frow" style="background:#fbeae7;border:1.5px solid #c4402e;border-radius:4px;padding:2px 5px"><b>b-23</b><span class="red" style="flex:1;font-weight:700">✕ err ×3 → retry on X</span><span class="btn" style="font-size:9px;padding:1px 5px">KILL</span></div>
+<div class="frow"><b>b-09</b><span class="blu" style="flex:1;overflow:hidden;white-space:nowrap">tool bash: grep -r claim</span><span class="dim">9s</span></div>
+<div class="frow"><b>b-25</b><span style="flex:1;overflow:hidden;white-space:nowrap;color:#4a473f">msg: drafting summary…</span><span class="dim">31s</span></div>
+<div class="frow" style="border:none"><span class="dim">+5 more ↓</span></div>
+</div>
+<div style="margin:4px 9px 8px;border:1.5px dashed #b8860b;border-radius:5px;padding:4px 7px" class="mono amb">▣ PARKED 2 — b-41 b-47 (lane cap) <span class="btn" style="font-size:9px;padding:1px 5px">requeue→C</span></div>
+</div>
+</div>
+<div class="hatch" style="margin:0 14px 10px;border:1.5px solid #1c1b18;border-radius:6px;padding:5px 10px;display:flex;gap:14px;align-items:baseline"><span class="mono" style="font-weight:700;font-size:11px;background:#fff;padding:0 5px">VERIFY WAVE</span><span class="mono" style="font-size:11px;background:#fff;padding:0 5px">C→X · X→G · G→Z · Z→C</span><span class="wn" style="background:#fff;padding:0 5px">judge ≠ executor, from VERIFY_MAP — verify rows render hatched in their judge's column</span></div>
+<div class="wn" style="padding:0 14px 12px">each column IS the firehose, demuxed per lane — but collapsed to one always-current line per agent. Aging rows tint amber automatically. Click row → same drawer as <a class="dv-oid" href="#1a">1a</a></div>
+</div>
+</div>
+
+<div class="dv-opt" id="1c" data-screen-label="1c Flightpath timeline">
+<div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a>Flightpath timeline — time × agents; silence becomes visible</div>
+<div class="dv-card" style="width:1240px">
+<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-bottom:1.5px solid #1c1b18"><span class="ct">FLIGHTPATHS</span><span class="mono dim" style="font-size:11px">sort: <b>quietest first</b> ▾ · zoom: drag · □ follow NOW</span></div>
+<div style="padding:12px 16px 4px">
+<div style="position:relative;margin-left:96px;margin-right:56px;height:16px" class="mono dim">
+<span style="position:absolute;left:0;font-size:10px">13:40</span><span style="position:absolute;left:20%;font-size:10px">13:45</span><span style="position:absolute;left:40%;font-size:10px">13:50</span><span style="position:absolute;left:60%;font-size:10px">13:55</span><span style="position:absolute;left:80%;font-size:10px">14:00</span><span class="hand red" style="position:absolute;left:86%;top:-2px;font-size:13px;font-weight:700">NOW ↓</span>
+</div>
+<div style="position:relative">
+<div style="position:absolute;left:calc(96px + (100% - 152px) * 0.86);top:0;bottom:0;border-left:2px dashed #c4402e;z-index:2"></div>
+<div class="hand dim" style="font-size:12px;margin:2px 0">— exec wave —</div>
+<div style="display:flex;align-items:center;height:21px"><span class="mono" style="width:90px;font-size:10.5px;flex:none"><b>b-01</b> C</span><div style="flex:1;position:relative;height:17px;border-bottom:1px solid #eee8da"><div class="bar" style="left:0;width:3%;border:1.5px dashed #9b968c"></div><div class="bar" style="left:3%;width:35%;border:1.5px solid #1c1b18"></div><div class="bar hatch" style="left:40%;width:12%;border:1.5px solid #1c1b18"></div><span class="dot" style="left:12%;background:#2a6fc2"></span><span class="dot" style="left:24%;background:#2a6fc2"></span></div><span class="mono grn" style="width:46px;text-align:right;font-size:10.5px;flex:none">✓</span></div>
+<div style="display:flex;align-items:center;height:21px"><span class="mono" style="width:90px;font-size:10.5px;flex:none"><b>b-02</b> X</span><div style="flex:1;position:relative;height:17px;border-bottom:1px solid #eee8da"><div class="bar" style="left:0;width:5%;border:1.5px dashed #9b968c"></div><div class="bar" style="left:5%;width:39%;border:1.5px solid #1c1b18"></div><div class="bar hatch" style="left:46%;width:14%;border:1.5px solid #1c1b18"></div><span class="dot" style="left:18%;background:#2a6fc2"></span><span class="dot" style="left:33%;background:#2a6fc2"></span></div><span class="mono grn" style="width:46px;text-align:right;font-size:10.5px;flex:none">✓</span></div>
+<div style="display:flex;align-items:center;height:21px"><span class="mono" style="width:90px;font-size:10.5px;flex:none"><b>b-03</b> C</span><div style="flex:1;position:relative;height:17px;border-bottom:1px solid #eee8da"><div class="bar" style="left:2%;width:4%;border:1.5px dashed #9b968c"></div><div class="bar" style="left:6%;width:80%;border:1.5px solid #1c1b18"></div><span class="dot" style="left:20%;background:#2a6fc2"></span><span class="dot" style="left:35%;background:#2a6fc2"></span><span class="dot" style="left:55%;background:#2a6fc2"></span><span class="dot" style="left:70%;background:#2a6fc2"></span><span class="dot" style="left:83%;background:#2a6fc2"></span></div><span class="mono" style="width:46px;text-align:right;font-size:10.5px;flex:none">4s</span></div>
+<div style="display:flex;align-items:center;height:21px"><span class="mono" style="width:90px;font-size:10.5px;flex:none"><b>b-07</b> G</span><div style="flex:1;position:relative;height:17px;border-bottom:1px solid #eee8da"><div class="bar" style="left:4%;width:6%;border:1.5px dashed #9b968c"></div><div class="bar" style="left:10%;width:76%;border:1.5px solid #1c1b18"></div><span class="dot" style="left:25%;background:#2a6fc2"></span><span class="dot" style="left:42%;background:#2a6fc2"></span><span class="dot" style="left:66%;background:#2a6fc2"></span><span class="dot" style="left:80%;background:#2a6fc2"></span></div><span class="mono" style="width:46px;text-align:right;font-size:10.5px;flex:none">3s</span></div>
+<div style="display:flex;align-items:center;height:21px;background:#fdf6e3;border-radius:4px"><span class="mono" style="width:90px;font-size:10.5px;flex:none"><b>b-17</b> X ⚠</span><div style="flex:1;position:relative;height:17px"><div class="bar" style="left:3%;width:5%;border:1.5px dashed #9b968c"></div><div class="bar" style="left:8%;width:34%;border:1.5px solid #1c1b18"></div><div class="bar" style="left:42%;width:44%;border:1.5px dashed #b8860b"></div><span class="dot" style="left:15%;background:#2a6fc2"></span><span class="dot" style="left:30%;background:#2a6fc2"></span><span class="dot" style="left:41%;background:#c4402e"></span></div><span class="mono amb" style="width:46px;text-align:right;font-size:10.5px;font-weight:700;flex:none">14m!</span></div>
+<div style="display:flex;align-items:center;height:21px"><span class="mono" style="width:90px;font-size:10.5px;flex:none"><b>b-23</b> Z→X</span><div style="flex:1;position:relative;height:17px;border-bottom:1px solid #eee8da"><div class="bar" style="left:5%;width:25%;border:1.5px solid #1c1b18"></div><span class="dot" style="left:22%;background:#c4402e"></span><span class="dot" style="left:26%;background:#c4402e"></span><span class="dot" style="left:29%;background:#c4402e"></span><div class="bar" style="left:33%;width:15%;border:1.5px dashed #c4402e"></div><div class="bar" style="left:50%;width:36%;border:1.5px solid #1c1b18"></div><span class="dot" style="left:60%;background:#2a6fc2"></span><span class="dot" style="left:74%;background:#2a6fc2"></span></div><span class="mono" style="width:46px;text-align:right;font-size:10.5px;flex:none">2m</span></div>
+<div style="display:flex;align-items:center;height:21px"><span class="mono" style="width:90px;font-size:10.5px;flex:none"><b>b-31</b> G</span><div style="flex:1;position:relative;height:17px;border-bottom:1px solid #eee8da"><div class="bar" style="left:6%;width:6%;border:1.5px dashed #9b968c"></div><div class="bar" style="left:12%;width:48%;border:1.5px solid #1c1b18"></div><span class="dot" style="left:30%;background:#2a6fc2"></span><span class="dot" style="left:50%;background:#2a6fc2"></span></div><span class="mono grn" style="width:46px;text-align:right;font-size:10.5px;flex:none">✓</span></div>
+<div style="display:flex;align-items:center;height:21px"><span class="mono" style="width:90px;font-size:10.5px;flex:none"><b>b-41</b> Z</span><div style="flex:1;position:relative;height:17px;border-bottom:1px solid #eee8da"><div class="bar" style="left:8%;width:6%;border:1.5px dashed #9b968c"></div><div class="bar hatch" style="left:14%;width:8%;border:1.5px dashed #b8860b"></div><span class="mono amb" style="position:absolute;left:24%;top:1px;font-size:9.5px">parked (.limited)</span></div><span class="mono dim" style="width:46px;text-align:right;font-size:10.5px;flex:none">—</span></div>
+<div class="hand dim" style="font-size:12px;margin:4px 0 2px">— verify wave (judge ≠ executor) —</div>
+<div style="display:flex;align-items:center;height:21px"><span class="mono" style="width:90px;font-size:10.5px;flex:none"><b>v-01</b> X⊢C</span><div style="flex:1;position:relative;height:17px;border-bottom:1px solid #eee8da"><div class="bar hatch" style="left:55%;width:15%;border:1.5px solid #1c1b18"></div></div><span class="mono grn" style="width:46px;text-align:right;font-size:10.5px;flex:none">✓</span></div>
+<div style="display:flex;align-items:center;height:21px"><span class="mono" style="width:90px;font-size:10.5px;flex:none"><b>v-02</b> G⊢X</span><div style="flex:1;position:relative;height:17px;border-bottom:1px solid #eee8da"><div class="bar hatch" style="left:60%;width:26%;border:1.5px solid #1c1b18"></div><span class="dot" style="left:75%;background:#2a6fc2"></span></div><span class="mono" style="width:46px;text-align:right;font-size:10.5px;flex:none">30s</span></div>
+<div style="display:flex;align-items:center;height:21px"><span class="mono" style="width:90px;font-size:10.5px;flex:none"><b>v-03</b> C⊢G</span><div style="flex:1;position:relative;height:17px;border-bottom:1px solid #eee8da"><div class="bar hatch" style="left:62%;width:24%;border:1.5px solid #1c1b18"></div><span class="dot" style="left:70%;background:#2a6fc2"></span><span class="dot" style="left:81%;background:#2a6fc2"></span></div><span class="mono" style="width:46px;text-align:right;font-size:10.5px;flex:none">8s</span></div>
+<div class="mono dim" style="margin-left:96px;font-size:10px;padding:2px 0">⋮ 39 more rows (virtualized)</div>
+</div>
+<div style="display:flex;gap:16px;margin:10px 0 0;margin-left:96px;margin-right:56px">
+<div style="flex:1"><div class="hand" style="font-size:12px">$ burn (cumulative, shared x-axis)</div><div style="display:flex;align-items:flex-end;gap:1px;height:34px;border-bottom:1.5px solid #1c1b18"><div style="flex:1;height:6%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:9%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:13%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:16%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:22%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:27%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:31%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:38%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:44%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:52%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:57%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:61%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:68%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:74%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:79%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:84%;background:rgba(28,27,24,.25)"></div></div><div class="mono dim" style="font-size:10px">$0 → $4.20 · budget line at $10</div></div>
+<div style="flex:1"><div class="hand" style="font-size:12px">events/min</div><div style="display:flex;align-items:flex-end;gap:1px;height:34px;border-bottom:1.5px solid #1c1b18"><div style="flex:1;height:30%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:55%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:45%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:65%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:50%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:90%;background:#c4402e"></div><div style="flex:1;height:40%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:58%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:48%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:35%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:52%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:44%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:38%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:47%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:41%;background:rgba(28,27,24,.25)"></div><div style="flex:1;height:36%;background:rgba(28,27,24,.25)"></div></div><div class="mono dim" style="font-size:10px"><span class="red">red spike = retry storm (b-23)</span></div></div>
+</div>
+<div class="wn" style="padding:10px 0 12px">the killer feature: a <b>flat bar with no dots = stuck agent</b> — silence is literally visible. Solid = executing · dashed gray = queued · <span class="amb">dashed amber = silent past threshold</span> · hatch = verify · dots = <span class="blu">tool calls</span> / <span class="red">errors</span>. Click row → drawer from <a class="dv-oid" href="#1a">1a</a></div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1d" data-screen-label="1d Glance wall">
+<div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a>Glance wall — exceptions-first, readable from 3 meters</div>
+<div class="dv-card" style="width:980px">
+<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-bottom:1.5px solid #1c1b18"><span class="ct">STATUS WALL</span><span class="mono dim" style="font-size:11px">for the always-on second monitor</span></div>
+<div style="padding:18px 22px 6px;text-align:center">
+<div class="hand" style="font-size:52px;font-weight:700;line-height:1;color:#b8860b">⚠ 3 NEED ATTENTION</div>
+<div class="wn" style="margin:2px 0 0">(otherwise this reads <span class="grn" style="font-weight:700">ALL CLEAR — 39 working</span> in green — one glance, done)</div>
+<div class="mono" style="font-size:14px;margin-top:8px">39 running · 5 queued · <b>31/50 done</b> · burn $0.42/min · $4.20/$10 · est ~18m left</div>
+</div>
+<div style="display:flex;gap:12px;padding:14px 22px">
+<div class="wf" style="flex:1;border-width:2.5px;border-color:#c4402e;padding:12px 14px"><div class="mono" style="font-size:20px;font-weight:700">b-23 <span class="red">✕ error ×3</span></div><div class="mono dim" style="font-size:11px;margin:3px 0 10px">glm ETIMEDOUT → last chain retry</div><span class="btn" style="font-size:13px;padding:4px 12px">KILL + CANCEL</span></div>
+<div class="wf" style="flex:1;border-width:2.5px;border-color:#b8860b;padding:12px 14px"><div class="mono" style="font-size:20px;font-weight:700">b-17 <span class="amb">silent 14m</span></div><div class="mono dim" style="font-size:11px;margin:3px 0 10px">codex · lease dies in 6m anyway</div><span class="btn" style="font-size:13px;padding:4px 12px">NUDGE NOW</span></div>
+<div class="wf" style="flex:1;border-width:2.5px;border-color:#b8860b;padding:12px 14px"><div class="mono" style="font-size:20px;font-weight:700">BUDGET 42%</div><div class="mono dim" style="font-size:11px;margin:3px 0 10px">on pace to hit $10 before gate</div><span class="btn" style="font-size:13px;padding:4px 12px">PAUSE QUEUE</span></div>
+</div>
+<div style="padding:4px 22px 6px">
+<div class="hand" style="font-size:13px;margin-bottom:4px">all 50 agents — cell color = age since last event</div>
+<div style="display:flex;flex-wrap:wrap;gap:3px">
+<sc-for list="{{ heat }}" as="h" hint-placeholder-count="20">
+<span title="{{h.t}}" style="width:16px;height:16px;border:1px solid #1c1b18;border-radius:3px;background:{{h.hc}}"></span>
+</sc-for>
+</div>
+<div class="mono dim" style="font-size:10.5px;margin-top:4px"><span class="grn">■ fresh</span> → <span class="amb">■ aging</span> → <span class="red">■ stuck</span> · <span>■ done(gray)</span> · □ queued — hover a cell for id, click → drill-in</div>
+</div>
+<div style="padding:8px 22px 4px">
+<div class="hand" style="font-size:13px;margin-bottom:4px">gate: done + parked ≥ live specs</div>
+<div style="height:20px;border:1.5px solid #1c1b18;border-radius:6px;overflow:hidden;display:flex"><div style="width:62%;background:#3d8a5c"></div><div class="hatch" style="width:4%"></div><div style="flex:1;background:#fff"></div></div>
+<div class="mono dim" style="font-size:10.5px;margin-top:3px">31 done + 2 parked / 50 — verify wave unlocks at 100%</div>
+</div>
+<div class="wn" style="padding:10px 22px 14px">nothing else on this screen, on purpose. Alert rules, not log-scrolling: age &gt; LEASE_MIN/2 · retries ≥ 2 · budget &gt; 80% · queue starved while a lane idles. Clicking anything opens <a class="dv-oid" href="#1a">1a</a>-style drill-in. Optional: flash tab title + beep on new alert</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1e" data-screen-label="1e Live bus topology">
+<div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a>Live bus topology — watch the pipeline itself for bulges</div>
+<div class="dv-card" style="width:1240px">
+<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-bottom:1.5px solid #1c1b18"><span class="ct">THE PLUMBING</span><span class="mono dim" style="font-size:11px">literally the bus dirs: specs/ → queue/ → claimed/ → done/</span></div>
+<div style="display:flex;gap:6px;align-items:center;padding:14px 12px 8px;overflow-x:auto">
+<div class="wf" style="padding:9px 11px;text-align:center;flex:none"><div class="mono" style="font-weight:700;font-size:12px">SPECS</div><div class="hand" style="font-size:22px">50</div><div class="mono dim" style="font-size:9.5px">written by Fable</div></div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div style="flex:none;text-align:center"><div class="wf" style="padding:9px 11px"><div class="mono" style="font-weight:700;font-size:12px">QUEUE</div><div class="hand" style="font-size:22px">5</div><div class="mono dim" style="font-size:9.5px">▂▂▃ trend</div></div><div class="chip" style="margin-top:5px;font-size:10px">‖ PAUSE valve</div></div>
+<div style="flex:none;display:flex;flex-direction:column;align-items:center;gap:1px"><div class="wn" style="transform:rotate(-2deg);white-space:nowrap;line-height:1">atomic<br>rename<br>= claim</div><span class="mono" style="font-size:16px">→</span></div>
+<div style="flex:none;display:flex;flex-direction:column;gap:6px">
+<div class="wf" style="display:flex;gap:8px;align-items:center;padding:6px 10px"><span class="lb">C</span><span class="mono" style="font-size:11px;font-weight:700">claude ×12</span><span class="mono blu" style="font-size:10px">▂▃▅▃</span><span class="mono dim" style="font-size:10px">$2.10</span><span class="mono dim" style="font-size:10px">b-03 b-11 +10</span></div>
+<div class="wf" style="display:flex;gap:8px;align-items:center;padding:6px 10px;border-color:#b8860b"><span class="lb">X</span><span class="mono" style="font-size:11px;font-weight:700">codex ×10</span><span class="mono blu" style="font-size:10px">▃▅▂▁</span><span class="mono dim" style="font-size:10px">$1.35</span><span class="mono amb" style="font-size:10px;font-weight:700">⚠ b-17 silent</span></div>
+<div class="wf" style="display:flex;gap:8px;align-items:center;padding:6px 10px"><span class="lb">G</span><span class="mono" style="font-size:11px;font-weight:700">gemini ×8</span><span class="mono blu" style="font-size:10px">▅▆▅▃</span><span class="mono dim" style="font-size:10px">$0.55</span><span class="chip" style="font-size:9px;padding:0 5px">read-only</span></div>
+<div class="wf" style="display:flex;gap:8px;align-items:center;padding:6px 10px;border-color:#c4402e"><span class="lb">Z</span><span class="mono" style="font-size:11px;font-weight:700">glm ×9</span><span class="mono blu" style="font-size:10px">▂▁▃▂</span><span class="mono dim" style="font-size:10px">$0.20</span><span class="chip" style="font-size:9px;padding:0 5px;border-color:#c4402e;color:#c4402e">.limited</span></div>
+</div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div class="wf" style="padding:9px 11px;text-align:center;flex:none;border-style:dashed"><div class="mono" style="font-weight:700;font-size:12px">HANDOFF</div><div class="mono" style="font-size:11px">res-*.txt</div><div class="mono dim" style="font-size:9.5px">never scraped from panes</div></div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div class="wf" style="padding:9px 11px;text-align:center;flex:none;border-color:#3d8a5c;border-width:2px"><div class="mono" style="font-weight:700;font-size:12px">DONE</div><div class="hand grn" style="font-size:22px">31</div><div class="mono dim" style="font-size:9.5px">newest: b-35 12s</div></div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div class="wf" style="padding:9px 11px;text-align:center;flex:none;transform:rotate(-1deg)"><div class="mono" style="font-weight:700;font-size:12px">GATE</div><div class="hand" style="font-size:14px">done+parked ≥ live?</div><div class="mono amb" style="font-size:10px;font-weight:700">33/50 — holding</div></div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div class="wf hatch" style="padding:9px 11px;text-align:center;flex:none"><div class="mono" style="font-weight:700;font-size:12px;background:#fff;padding:0 4px">VERIFY</div><div class="mono" style="font-size:10px;background:#fff;padding:0 4px">C→X X→G G→Z Z→C</div><div class="mono dim" style="font-size:9.5px;background:#fff;padding:0 4px">judge ≠ executor</div></div>
+<span class="mono" style="font-size:16px;flex:none">→</span>
+<div class="wf" style="padding:9px 11px;text-align:center;flex:none"><div class="mono" style="font-weight:700;font-size:12px">SYNTH</div><div class="mono dim" style="font-size:10px">Fable adjudicates</div></div>
+</div>
+<div style="display:flex;gap:10px;padding:4px 16px 10px;margin-left:120px">
+<div style="border:1.5px dashed #b8860b;border-radius:6px;padding:4px 10px;font-size:12px;white-space:nowrap" class="mono amb">▣ PARKED 2 <span class="dim">(lane caps)</span></div>
+<div style="border:1.5px dashed #9b968c;border-radius:6px;padding:4px 10px;font-size:12px;white-space:nowrap" class="mono dim">⊘ CANCELLED 1</div>
+<div style="border:1.5px dashed #9b968c;border-radius:6px;padding:4px 10px;font-size:12px;white-space:nowrap" class="mono dim">↻ reaper: requeues dead leases</div>
+</div>
+<div class="wn" style="padding:0 16px 14px">watch for <b>bulges</b>: queue count grows while lanes sit idle = starvation (rate caps) — box borders thicken with count. Every node is a click-filter on the event stream; agent chips open the <a class="dv-oid" href="#1a">1a</a> drawer. Best as an <b>overview tab</b> next to a denser view, or the top strip above <a class="dv-oid" href="#1b">1b</a></div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Try next: "merge <a class="dv-oid" href="#1d">1d</a>'s verdict header onto <a class="dv-oid" href="#1a">1a</a>'s grid" · "take <a class="dv-oid" href="#1c">1c</a> to a clickable dark-theme prototype" · "riff on <a class="dv-oid" href="#1a">1a</a> with denser tiles for 200 agents"</p>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;annotations&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Wireframe&quot;}}">
+class Component extends DCLogic {
+  componentDidMount(){ this._n(); }
+  componentDidUpdate(){ this._n(); }
+  _n(){ document.body.classList.toggle('no-notes', this.props.annotations === false); }
+  renderVals(){
+    const lanes = ['C','X','G','Z'];
+    const rnd = (i,n)=>{ const x = Math.sin(i*127.1 + n*311.7) * 43758.5453; return x - Math.floor(x); };
+    const agents = [];
+    for(let i=1;i<=50;i++){
+      const r = rnd(i,1), lane = lanes[i%4];
+      let st = 'run';
+      if(i===17||i===33) st='stale'; else if(i===23) st='err';
+      else if(r<0.40) st='done'; else if(r<0.50) st='queued';
+      const age = st==='stale' ? (i===17?'14m':'9m') : st==='err' ? '2m' : st==='queued' ? '\u2014' : st==='done' ? '' : Math.floor(rnd(i,2)*55+1)+'s';
+      const low = st==='done'||st==='queued';
+      const blocks = ['\u2581','\u2582','\u2583','\u2584','\u2585','\u2586','\u2587'];
+      let pulse=''; for(let k=0;k<7;k++) pulse += blocks[Math.floor(rnd(i,k+3)*(low?2:7))];
+      agents.push({
+        id:'b-'+String(i).padStart(2,'0'), lane, st, age, pulse,
+        tok: (rnd(i,9)*88+4).toFixed(0)+'k',
+        bc: st==='stale' ? '#b8860b' : st==='err' ? '#c4402e' : '#1c1b18',
+        bw: (st==='stale'||st==='err') ? '2.5px' : '1.5px',
+        op: st==='done' ? '0.38' : st==='queued' ? '0.55' : '1',
+        glyph: st==='done' ? '\u2713' : st==='err' ? '\u2715' : st==='stale' ? '\u26a0' : st==='queued' ? '\u25cc' : '\u25cf',
+        gc: st==='done' ? '#3d8a5c' : st==='err' ? '#c4402e' : st==='stale' ? '#b8860b' : '#1c1b18'
+      });
+    }
+    const rank = {err:0, stale:1, run:2, queued:3, done:4};
+    agents.sort((a,b)=> rank[a.st]-rank[b.st] || a.id.localeCompare(b.id));
+    const heat = agents.slice().sort((a,b)=>a.id.localeCompare(b.id)).map(a=>({
+      t: a.id+' \u00b7 '+a.st,
+      hc: a.st==='err' ? '#c4402e' : a.st==='stale' ? '#d6a520' : a.st==='done' ? '#dcd8ce' : a.st==='queued' ? '#ffffff' : (rnd(parseInt(a.id.slice(2),10),5)<0.25 ? '#8fbf72' : '#3d8a5c')
+    }));
+    return { agents, heat };
+  }
+}
+</script>
+</body>
+</html>

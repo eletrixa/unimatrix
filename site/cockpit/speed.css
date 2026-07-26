@@ -1,0 +1,551 @@
+/**
+ * SPEEDWARS view styles — the historical run-evidence board.
+ *
+ * Project: unimatrix — multi-model swarm orchestrator driven from Claude Code
+ * Module:  site/cockpit/speed.css
+ * Deps:    base.css (:root tokens, .btn-ctl atom); scoped entirely under #view-speed
+ * Tested:  playwright Lane-A QA (spec 09 acceptance criteria)
+ *
+ * Key responsibilities:
+ * - Panel header, sub-tab bar (TOTAL + per-field dimensions), stat row, tables, bars,
+ *   the per-card distribution strip, the refutation wall and the run-review cards.
+ *
+ * Design constraints:
+ * - Owns ONLY #view-speed (base.css rule: a view's CSS never reaches outside its container).
+ * - Tokens only — no literal colors except the semantic ones already in :root. Lane hues arrive
+ *   per-element as the custom property --lane, set from format.js laneColor(); never hard-coded.
+ * - No SVG, no images, no external asset: bars/stacks/dots are divs, hatches are gradients —
+ *   the same technique flight.css uses.
+ * - This view scrolls internally; the page itself never scrolls (body is overflow:hidden).
+ */
+
+#view-speed {
+  padding: 16px 20px 28px;
+  gap: 0;
+  overflow: auto;
+}
+
+/* --- header ------------------------------------------------------------------------------------ */
+
+#view-speed .sw-hdr {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 12px;
+}
+
+#view-speed .sw-title {
+  font-size: 15px;
+  letter-spacing: 0.22em;
+  color: var(--accent);
+  text-transform: uppercase;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+#view-speed .sw-sub {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  text-transform: none;
+}
+
+#view-speed .sw-hdr-r {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 11px;
+}
+
+#view-speed .dim { color: var(--dim); }
+#view-speed .bad { color: var(--red); }
+#view-speed .warn { color: var(--amber); }
+#view-speed .mono { color: var(--text); }
+
+/* --- sub-tabs ----------------------------------------------------------------------------------- */
+
+#view-speed .sw-tabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line-strong);
+  margin-bottom: 16px;
+}
+
+#view-speed .sw-tab {
+  font-family: var(--font);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--dim);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 16px 7px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+#view-speed .sw-tab:hover { color: var(--text); }
+
+#view-speed .sw-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+#view-speed .sw-tab:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* --- stat row ----------------------------------------------------------------------------------- */
+
+#view-speed .sw-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+#view-speed .sw-stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px 16px;
+  animation: rise 0.18s ease both;
+}
+
+#view-speed .sw-stat-v {
+  font-size: 26px;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+#view-speed .sw-stat-l {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-top: 8px;
+}
+
+#view-speed .sw-stat-s {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* --- panels ------------------------------------------------------------------------------------- */
+
+#view-speed .sw-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px 16px 16px;
+  margin-bottom: 14px;
+}
+
+#view-speed .sw-panel-h {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+
+#view-speed .sw-panel-h .dim { letter-spacing: 0.04em; text-transform: none; }
+
+#view-speed .sw-note {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+#view-speed .sw-empty {
+  font-size: 12px;
+  color: var(--dim);
+  padding: 18px 2px;
+}
+
+/* --- tables ------------------------------------------------------------------------------------- */
+
+#view-speed .sw-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+#view-speed .sw-table th {
+  font-weight: normal;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  text-align: left;
+  padding: 0 10px 7px 0;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+#view-speed .sw-table td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+#view-speed .sw-table tbody tr:last-child td { border-bottom: none; }
+#view-speed .sw-table tbody tr:hover td { background: var(--inset); }
+#view-speed .sw-table th.n, #view-speed .sw-table td.n { text-align: right; }
+#view-speed .sw-table th.w { width: 34%; }
+
+/* A bar cell packs the bar and its exact number on one line — the bar is shape, the number is truth.
+   The flex lives on an INNER wrapper: setting display:flex on the <td> itself drops the cell out of
+   the table layout algorithm and the columns stack vertically. */
+#view-speed .sw-table td.w > .sw-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#view-speed .sw-table td.w .n { flex: none; min-width: 62px; text-align: right; }
+
+/* --- bars / stacks / splits ---------------------------------------------------------------------- */
+
+#view-speed .sw-bar {
+  flex: 1;
+  min-width: 40px;
+  height: 8px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  display: block;
+}
+
+#view-speed .sw-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--c, var(--accent));
+  opacity: 0.85;
+}
+
+#view-speed .sw-stack {
+  display: flex;
+  height: 8px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--inset);
+}
+
+#view-speed .sw-stack > i { display: block; height: 100%; }
+#view-speed .sw-stack .t-cached { background: var(--dim); opacity: 0.45; }
+#view-speed .sw-stack .t-in { background: var(--blue); opacity: 0.7; }
+#view-speed .sw-stack .t-out { background: var(--accent); }
+
+#view-speed .k-cached { color: var(--dim); }
+#view-speed .k-in { color: var(--blue); }
+#view-speed .k-out { color: var(--accent); }
+
+#view-speed .sw-split {
+  flex: 1;
+  min-width: 40px;
+  display: flex;
+  height: 8px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--inset);
+}
+
+#view-speed .sw-split > i { display: block; height: 100%; }
+#view-speed .sw-split .ok { background: var(--accent); }
+#view-speed .sw-split .bad { background: var(--red); opacity: 0.8; }
+
+/* --- lane chips ----------------------------------------------------------------------------------- */
+
+#view-speed .sw-lane {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 11px;
+  padding: 1px 8px 2px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--lane, var(--accent));
+  border-radius: 3px;
+  color: var(--text);
+}
+
+#view-speed .sw-lane b { color: var(--lane, var(--accent)); font-weight: normal; }
+
+#view-speed .sw-mix {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--lane, var(--accent));
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 5px;
+  margin-right: 3px;
+}
+
+/* --- distribution strip ------------------------------------------------------------------------------ */
+
+#view-speed .sw-strips { display: flex; flex-direction: column; gap: 6px; }
+
+#view-speed .sw-strip-row { display: flex; align-items: center; gap: 12px; }
+#view-speed .sw-strip-l { flex: none; width: 96px; }
+
+#view-speed .sw-strip {
+  position: relative;
+  flex: 1;
+  height: 22px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  /* decade gridlines, drawn as a gradient so the scale is readable without an axis per row */
+  /* decade gridlines are drawn per-strip from the real log positions (inline, in speed.js) — a
+     repeating gradient would space them evenly and lie about the scale. */
+}
+
+#view-speed .sw-dot {
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: var(--c, var(--accent));
+  opacity: 0.75;
+  transition: transform 0.1s ease, opacity 0.1s ease;
+}
+
+#view-speed .sw-dot:hover { transform: scale(1.6); opacity: 1; }
+#view-speed .sw-dot.is-timeout { background: var(--red); opacity: 1; }
+#view-speed .sw-dot.is-refuted { background: transparent; border: 1.5px solid var(--c, var(--accent)); }
+
+#view-speed .sw-axis {
+  position: relative;
+  height: 14px;
+  font-size: 10px;
+  color: var(--dim);
+  margin: 6px 0 0 108px;
+}
+
+/* Each tick sits at its true log offset — the same transform the dots use — so a label can never
+   imply a position the scale does not actually have. */
+#view-speed .sw-axis span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+#view-speed .sw-axis span:first-child { transform: none; }
+#view-speed .sw-axis span:last-child { transform: translateX(-100%); }
+
+/* --- refutation wall ---------------------------------------------------------------------------------- */
+
+#view-speed .sw-refutes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 10px;
+}
+
+#view-speed .sw-refute {
+  background: var(--inset);
+  border: 1px solid var(--red-line);
+  border-left: 2px solid var(--red);
+  border-radius: 4px;
+  padding: 10px 12px;
+  animation: rise 0.18s ease both;
+}
+
+#view-speed .sw-refute-h {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+#view-speed .sw-refute-r {
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.5;
+  white-space: normal;
+}
+
+/* --- run review cards ----------------------------------------------------------------------------------- */
+
+#view-speed .sw-runcards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px;
+}
+
+#view-speed .sw-runcard {
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 12px 14px;
+}
+
+#view-speed .sw-runcard-h {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+#view-speed .sw-rev-overall {
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+#view-speed .sw-rev-lane { margin-bottom: 10px; }
+#view-speed .sw-rev-lane:last-child { margin-bottom: 0; }
+
+#view-speed .sw-rev-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 5px;
+}
+
+#view-speed .sw-score { color: var(--accent); font-size: 11px; letter-spacing: 0.1em; }
+
+#view-speed .sw-tag {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 6px;
+  margin: 0 4px 4px 0;
+}
+
+#view-speed .sw-rev-note {
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.5;
+  white-space: normal;
+}
+
+/* decade gridline inside a distribution strip — positioned from the same log transform as the dots */
+#view-speed .sw-grid {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--line);
+  pointer-events: none;
+}
+
+/* --- verdict line + best-in-column ------------------------------------------------------------------ */
+
+#view-speed .sw-verdict {
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.6;
+  padding: 0 2px 14px;
+}
+
+#view-speed .sw-verdict b { font-weight: normal; }
+
+#view-speed .sw-best {
+  color: var(--accent);
+  font-size: 10px;
+  margin-left: 5px;
+}
+
+/* --- run trend strip -------------------------------------------------------------------------------- */
+
+#view-speed .sw-trends { display: flex; gap: 16px; }
+#view-speed .sw-trend { flex: 1; min-width: 0; }
+
+#view-speed .sw-trend-t {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+  margin-bottom: 6px;
+}
+
+#view-speed .sw-trend-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 48px;
+  padding: 0 1px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+
+#view-speed .sw-tick {
+  flex: 1;
+  min-width: 5px;
+  padding: 0;
+  border: none;
+  border-radius: 1px 1px 0 0;
+  background: var(--c, var(--accent));
+  opacity: 0.8;
+  cursor: pointer;
+  transition: opacity 0.12s ease;
+}
+
+#view-speed .sw-tick:hover { opacity: 1; }
+
+/* A gap-tick is a measurement that does not exist, drawn on the same baseline as measurements that
+   do. Never height:0 — an absent value and a measured zero must not look alike. */
+#view-speed .sw-tick-gap {
+  height: 2px;
+  background: var(--dim);
+  opacity: 0.35;
+  align-self: flex-end;
+}
+
+#view-speed .sw-trend-c {
+  font-size: 10px;
+  color: var(--dim);
+  margin-top: 6px;
+}
+
+/* --- transient jump highlight ------------------------------------------------------------------------ */
+
+#view-speed .sw-table td { transition: background 0.3s ease; }
+#view-speed .sw-table tr.is-flash td { background: rgba(52, 211, 153, 0.1); }
+
+#view-speed .sw-refute { transition: background 0.3s ease, border-color 0.3s ease; }
+#view-speed .sw-refute.is-flash {
+  border-color: var(--red);
+  background: rgba(249, 112, 102, 0.07);
+}
+
+/* --- focus rings on the new interactive elements ------------------------------------------------------ */
+
+#view-speed .sw-tick:focus-visible,
+#view-speed .sw-dot:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* the refuted dot is a <button>, so it needs the <i> geometry restored */
+#view-speed button.sw-dot {
+  padding: 0;
+  border: 1.5px solid var(--c, var(--accent));
+  background: transparent;
+  cursor: pointer;
+}

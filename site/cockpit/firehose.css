@@ -1,0 +1,199 @@
+/**
+ * Firehose view (view 4) styles — port of the legacy #firehose panel, scoped under #view-fire.
+ *
+ * Project: unimatrix — multi-model swarm orchestrator driven from Claude Code
+ * Module:  site/cockpit/firehose.css
+ * Deps:    base.css tokens (--panel, --inset, --log-bg, --text, --dim, --accent, --line, --font)
+ * Tested:  n/a
+ *
+ * Key responsibilities:
+ * - Layout the firehose shell (title, filter chips, hint, scrollable #feed) inside #view-fire only.
+ * - Style kind/worker chips, feed rows, badges, live spinner, raw lines, and expand detail pre.
+ * - Dim backfill (replay) rows so live arrivals read hotter without inventing any data.
+ *
+ * Design constraints:
+ * - Styles ONLY under #view-fire — never touch ops/grid/flight/drawer/header.
+ * - Pixel/behavior port of plans/002-cockpit-redesign/legacy-cockpit.html #firehose rules;
+ *   tokens come from base.css (plan §1.1), not a second palette.
+ * - Feed must stay mounted across view switches (main.js display:none); no absolute positioning
+ *   that would break scroll restoration.
+ */
+
+/* --- shell layout (legacy #firehose → #view-fire) ------------------------------------------- */
+#view-fire {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 14px 16px;
+  overflow: hidden; /* only #feed scrolls — matches legacy panel */
+}
+
+#view-fire h2 {
+  margin: 0 0 2px;
+  font-size: 1rem;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+#view-fire .hint {
+  flex: none;
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  color: var(--dim);
+}
+
+/* --- filter chips --------------------------------------------------------------------------- */
+#view-fire .fh-filters {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+#view-fire .fh-chip {
+  font-family: var(--font);
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+  color: var(--dim);
+}
+
+#view-fire .fh-chip.on {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: rgba(52, 211, 153, 0.14);
+}
+
+#view-fire .fh-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line);
+  margin: 0 2px;
+}
+
+#view-fire #fh-kind-chips,
+#view-fire #fh-worker-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* --- feed scroll region --------------------------------------------------------------------- */
+#view-fire #feed {
+  flex: 1;
+  min-height: 0;
+  background: var(--log-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow-y: auto;
+  padding: 6px 10px;
+  font-family: var(--font);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+/* --- rows ----------------------------------------------------------------------------------- */
+#view-fire .fh-row {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  padding: 2px 2px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+#view-fire .fh-row:hover {
+  background: var(--inset);
+}
+
+/* Replay / backfill arrivals (entry.backfill) — dimmer; title set in JS */
+#view-fire .fh-row.fh-backfill,
+#view-fire .fh-raw.fh-backfill {
+  opacity: 0.55;
+}
+
+#view-fire .fh-time {
+  flex: none;
+  width: 64px;
+  color: var(--dim);
+}
+
+#view-fire .fh-branch {
+  flex: none;
+  min-width: 64px;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Model family chip (legacy .mchip) — color comes from entry.mc / MODEL_COLORS */
+#view-fire .mchip {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.68rem;
+  white-space: nowrap;
+  background: rgba(147, 168, 156, 0.14);
+  color: var(--dim);
+}
+
+#view-fire .fh-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* badge colors (.b-green/.b-red/.b-blue/.b-dim) are shared atoms in base.css */
+
+#view-fire .fh-sum {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+/* Live coalesce spinner — blink keyframe from base.css (same timing as legacy fh-blink) */
+#view-fire .fh-spin {
+  display: inline-block;
+  margin-left: 5px;
+  color: var(--accent);
+  animation: blink 1s ease-in-out infinite;
+}
+
+#view-fire .fh-raw {
+  color: var(--dim);
+  font-style: italic;
+  padding: 2px 2px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Click-to-expand raw JSON (32 KiB cap enforced in JS) */
+#view-fire .fh-detail {
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 2px 2px 6px;
+  padding: 8px 10px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 0.72rem;
+  color: var(--text);
+  font-family: var(--font);
+}

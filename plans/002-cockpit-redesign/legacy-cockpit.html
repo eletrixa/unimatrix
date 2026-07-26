@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<!--
+  UNIMATRIX cockpit (site/cockpit.html)
+
+  Project: unimatrix - multi-model swarm orchestrator driven from Claude Code
+  Module:  site/cockpit.html - live read-only web cockpit, served by site/server.mjs
+  Deps:    none at runtime (self-contained HTML/CSS/JS); Share Tech Mono self-hosted woff2;
+           polls/streams site/server.mjs's /api/bus, /api/stream (SSE), /api/cost, /api/models
+  Tested:  manual review in light/dark; degraded-notice path exercised against the public
+           deploy (no /api/*); tests/ground-control.bats covers the server side
+
+  Key responsibilities:
+  - board strip + live per-model notional-cost strip (MODELS, /api/models) + FIREHOSE (per-row
+    model chips, server receive-time) + per-lane COST inline - poll/stream server.mjs's API
+  - AGENTS settings drawer: the page's ONE write surface (GET/POST /api/config against
+    swarm.conf's allowlisted lane keys); collapsed by default
+  - degraded static "local-only" notice on the public deploy (first /api/bus fetch fails)
+
+  Design constraints:
+  - read-only on the bus - nothing here writes anywhere except POST /api/config
+  - same dark Borg-collective terminal language as index.html (identical CSS tokens, fonts,
+    nav/footer chrome); stays self-contained (no external runtime deps)
+  - normalizeModel / modelOf / MODEL_COLORS MUST stay in sync with server.mjs (spec 06)
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>UNIMATRIX — cockpit</title>
+<meta name="description" content="Live read-only cockpit for a running UNIMATRIX swarm: queue/claimed/done board, event firehose, and per-lane cost.">
+<link rel="icon" type="image/png" href="assets/unimatrix-logo.png">
+<style>
+/* ---------- tokens (same as index.html) ---------- */
+:root{
+  --bg:#070b09;
+  --surface:#0c120e;
+  --surface-2:#101812;
+  --line:rgba(94,234,166,.13);
+  --line-strong:rgba(94,234,166,.28);
+  --text:#e6f1ea;
+  --muted:#93a89c;
+  --accent:#34d399;
+  --accent-dim:#1d8a63;
+  --accent-ink:#052e1e;
+  --warn:#e0b34a;
+  --mono:'Share Tech Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif;
+  --radius:6px;
+  --maxw:none; /* cockpit uses the whole monitor — small gutters via .wrap's padding only */
+}
+@font-face{
+  font-family:'Share Tech Mono';
+  src:url('assets/fonts/share-tech-mono.woff2') format('woff2');
+  font-weight:400;font-style:normal;font-display:swap;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:var(--sans);font-size:16px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;
+}
+::selection{background:var(--accent);color:var(--accent-ink)}
+
+.field{
+  position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.5;
+  background-image:
+    linear-gradient(rgba(94,234,166,.04) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(94,234,166,.04) 1px,transparent 1px);
+  background-size:56px 56px;
+  mask-image:radial-gradient(ellipse 90% 70% at 50% 0%,#000 30%,transparent 75%);
+  -webkit-mask-image:radial-gradient(ellipse 90% 70% at 50% 0%,#000 30%,transparent 75%);
+}
+main,footer{position:relative;z-index:1}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+
+h1,h2,h3,.m{font-family:var(--mono);font-weight:400}
+h1{font-size:clamp(1.9rem,4.2vw,2.8rem);line-height:1.1;letter-spacing:-.01em}
+h2{font-size:1.1rem;margin-bottom:.5em;color:var(--accent)}
+p{max-width:65ch}
+.muted{color:var(--muted)}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+.nav{
+  flex:none;position:sticky;top:0;height:64px;z-index:50;
+  background:rgba(7,11,9,.82);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line);
+}
+.nav .wrap{height:100%;display:flex;align-items:center;gap:28px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:1.05rem;color:var(--text)}
+.brand img{width:26px;height:26px;border-radius:4px}
+.nav nav{margin-left:auto;display:flex;gap:22px;font-size:.9rem}
+.nav nav a{color:var(--muted)}
+.nav nav a:hover{color:var(--text);text-decoration:none}
+@media (max-width:640px){.nav nav a:not(.keep){display:none}}
+
+.eyebrow{
+  font-family:var(--mono);font-size:.75rem;text-transform:uppercase;
+  letter-spacing:.2em;color:var(--accent);margin-bottom:10px;
+}
+.lead{color:var(--muted);margin-top:10px;font-size:1rem}
+
+.panel{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:22px 24px;
+}
+
+main{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+main .wrap.hero{flex:none;padding-top:20px;padding-bottom:4px}
+main .wrap.hero h1{font-size:1.4rem}
+main .wrap.hero .lead{display:none} /* full description lives in guide.html; keep the strip lean */
+#panels{flex:1;display:flex;flex-direction:column;min-height:0;margin:12px 0}
+
+/* STRIP: board + cost, one compact row */
+.strip{
+  flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:6px 18px;
+  padding:9px 16px;margin-bottom:10px;min-height:44px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  font-family:var(--mono);font-size:.8rem;
+}
+.chip-group{display:flex;gap:14px;flex-wrap:wrap}
+.chip{display:flex;gap:5px;align-items:baseline;color:var(--muted);white-space:nowrap}
+.chip b{color:var(--accent);font-weight:400;font-size:.95rem}
+.chip.warn{color:var(--warn)}
+.chip.warn b{color:var(--warn)}
+#cost-inline{margin-left:auto;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:44%}
+
+.settings-toggle{
+  flex:none;font-family:var(--mono);font-size:.72rem;letter-spacing:.04em;cursor:pointer;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:4px;
+  color:var(--muted);padding:4px 10px;
+}
+.settings-toggle:hover{color:var(--text);border-color:var(--line-strong)}
+.settings-toggle.on{color:var(--accent);border-color:var(--accent-dim)}
+
+/* AGENTS settings drawer — the one write surface on this page (POST /api/config) */
+#drawer{
+  flex:none;display:none;flex-direction:column;gap:12px;
+  padding:12px 16px;margin-bottom:10px;
+  background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius);
+  font-family:var(--mono);font-size:.8rem;
+}
+#drawer.open{display:flex}
+/* accordion: native <details>/<summary>, closed by default (JS also forces this on every open) */
+.drawer-section{border-top:1px solid var(--line)}
+.drawer-section:first-child{border-top:none}
+.drawer-summary{
+  cursor:pointer;list-style:none;padding:6px 0;
+  font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;color:var(--accent);
+  display:flex;align-items:center;gap:6px;
+}
+.drawer-summary::-webkit-details-marker{display:none}
+.drawer-summary .chevron{display:inline-block;transition:transform .12s;font-size:.65rem}
+.drawer-section[open] .chevron{transform:rotate(90deg)}
+.drawer-body{display:flex;flex-direction:column;gap:6px;padding:6px 0 10px}
+.chain-row{display:flex;gap:6px;align-items:center}
+.chain-row select,.chain-row input,.num-field input{
+  font-family:var(--mono);font-size:.78rem;background:var(--surface-2);color:var(--text);
+  border:1px solid var(--line);border-radius:3px;padding:3px 6px;
+}
+.chain-row select{min-width:88px}
+.chain-row input[type=text]{width:150px}
+.chain-row button,.drawer-btn{
+  font-family:var(--mono);font-size:.72rem;background:var(--surface-2);color:var(--muted);
+  border:1px solid var(--line);border-radius:3px;padding:3px 9px;cursor:pointer;
+}
+.chain-row button:hover,.drawer-btn:hover{color:var(--text);border-color:var(--line-strong)}
+.drawer-btn.save{color:var(--accent-ink);background:var(--accent);border-color:var(--accent)}
+.drawer-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.drawer-status{font-size:.72rem;color:var(--muted)}
+.drawer-status.ok{color:var(--accent)}
+.drawer-status.err{color:#f97066}
+.num-field{display:flex;flex-direction:column;gap:3px}
+.num-field label{font-size:.66rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.num-field input{width:90px}
+
+/* MODELS: live per-model notional cost, compact row above the firehose */
+.models{
+  flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;
+  padding:8px 16px;margin-bottom:10px;min-height:40px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  font-family:var(--mono);font-size:.8rem;
+}
+.models .lbl{color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.12em}
+.mcell{
+  display:flex;align-items:baseline;gap:7px;padding:3px 9px;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:4px;white-space:nowrap;
+}
+.mcell .dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none;align-self:center}
+.mcell.live .dot{background:var(--accent);box-shadow:0 0 6px var(--accent)}
+.mcell .mname{font-weight:400}
+.mcell .mrate{color:var(--accent)}
+.mcell.idle .mrate{color:var(--muted)}
+.mcell .mtok{color:var(--muted);font-size:.72rem}
+.mcell .unpriced{color:var(--warn);font-size:.68rem}
+.models .empty{color:var(--muted)}
+
+/* model chip shared by the models panel and firehose rows */
+.mchip{flex:none;padding:1px 6px;border-radius:3px;font-size:.68rem;white-space:nowrap;
+  background:rgba(147,168,156,.14);color:var(--muted)}
+
+/* FIREHOSE */
+#firehose{flex:1;display:flex;flex-direction:column;min-height:0;padding:14px 16px}
+#firehose h2{margin-bottom:2px}
+#firehose .hint{flex:none;margin-bottom:8px}
+.fh-filters{flex:none;display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+.fh-chip{
+  font-family:var(--mono);font-size:.66rem;letter-spacing:.03em;cursor:pointer;
+  padding:2px 8px;border-radius:10px;border:1px solid var(--line);
+  background:var(--surface-2);color:var(--muted);
+}
+.fh-chip.on{color:var(--text);border-color:var(--line-strong);background:rgba(52,211,153,.14)}
+.fh-sep{width:1px;align-self:stretch;background:var(--line);margin:0 2px}
+#feed{
+  flex:1;min-height:0;
+  background:#050807;border:1px solid var(--line);border-radius:var(--radius);
+  overflow-y:auto;padding:6px 10px;
+  font-family:var(--mono);font-size:.78rem;line-height:1.5;
+}
+.fh-row{display:flex;gap:9px;align-items:baseline;padding:2px 2px;cursor:pointer;border-radius:3px}
+.fh-row:hover{background:var(--surface-2)}
+.fh-time{flex:none;width:64px;color:var(--muted)}
+.fh-branch{flex:none;min-width:64px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fh-badge{flex:none;padding:1px 6px;border-radius:3px;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em}
+.fh-badge.b-green{background:rgba(52,211,153,.15);color:var(--accent)}
+.fh-badge.b-red{background:rgba(249,112,102,.18);color:#f97066}
+.fh-badge.b-blue{background:rgba(125,211,252,.18);color:#7dd3fc}
+.fh-badge.b-dim{background:rgba(147,168,156,.14);color:var(--muted)}
+.fh-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.fh-spin{display:inline-block;margin-left:5px;color:var(--accent);animation:fh-blink 1s ease-in-out infinite}
+@keyframes fh-blink{0%,100%{opacity:.2}50%{opacity:1}}
+.fh-raw{color:var(--muted);font-style:italic;padding:2px 2px;white-space:pre-wrap;word-break:break-all}
+.fh-detail{
+  white-space:pre-wrap;word-break:break-all;margin:2px 2px 6px;padding:8px 10px;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:4px;
+  font-size:.72rem;color:var(--text);
+}
+
+/* degraded notice */
+#notice{
+  margin:36px 0;padding:36px;text-align:center;
+  background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius);
+}
+#notice p{margin:0 auto 18px;font-size:1.02rem;color:var(--text)}
+.btn{
+  display:inline-block;padding:10px 20px;border-radius:var(--radius);
+  font-family:var(--mono);font-size:.9rem;background:var(--accent);color:var(--accent-ink);
+}
+.btn:hover{background:#4ae0a8;text-decoration:none}
+
+footer{flex:none;padding:14px 0;font-size:.85rem;color:var(--muted)}
+footer .wrap{display:flex;flex-direction:column;gap:8px}
+footer .row{display:flex;gap:24px;flex-wrap:wrap;align-items:center}
+footer nav{margin-left:auto;display:flex;gap:18px}
+footer .note{font-size:.78rem;color:var(--accent-dim)}
+
+@media (prefers-color-scheme:light){
+  :root{
+    --bg:#f4f8f5;--surface:#ffffff;--surface-2:#eef4ef;
+    --line:rgba(6,78,52,.14);--line-strong:rgba(6,78,52,.3);
+    --text:#0c1a12;--muted:#4a5d52;--accent:#0c8a5c;--accent-dim:#0c8a5c;--accent-ink:#f2fbf6;
+  }
+  .field{opacity:.35}
+  #feed{background:#0c120e}
+  .fh-sum{color:#dce9e1}
+  .nav{background:rgba(244,248,245,.85)}
+}
+</style>
+</head>
+<body>
+<div class="field" aria-hidden="true"></div>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="assets/unimatrix-logo.png" alt="UNIMATRIX logo">UNIMATRIX</a>
+    <nav aria-label="Page">
+      <a href="index.html">Home</a>
+      <a href="guide.html">Guide</a>
+      <a href="agents.md">Agents</a>
+      <a class="keep" href="https://github.com/eletrixa/unimatrix">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap hero">
+    <div class="eyebrow">Read-only</div>
+    <h1>Cockpit</h1>
+    <p class="lead">Live queue/claimed/done board, event firehose, and per-lane token cost for a running swarm. Polls and streams a local server — nothing here ever writes to the bus.</p>
+  </div>
+
+  <div class="wrap" id="notice" hidden>
+    <p>Live cockpit is local-only. Start it with Ground Control (<code>gc</code>) or just run a swarm — it opens itself.</p>
+    <a class="btn" href="guide.html">Read the guide</a>
+  </div>
+
+  <div class="wrap" id="panels">
+    <div class="strip" id="board" aria-label="Board and cost summary">
+      <div class="chip-group" role="list" aria-label="Branch counts">
+        <span class="chip" role="listitem"><b id="c-queued">–</b>queued</span>
+        <span class="chip" role="listitem"><b id="c-claimed">–</b>claimed</span>
+        <span class="chip" role="listitem"><b id="c-done">–</b>done</span>
+        <span class="chip" role="listitem"><b id="c-cancelled">–</b>cancelled</span>
+      </div>
+      <div class="chip-group" id="warn-chips" aria-label="Warnings"></div>
+      <div id="cost-inline" title="">–</div>
+      <button type="button" class="settings-toggle" id="settings-toggle" aria-expanded="false" aria-controls="drawer">⚙ AGENTS</button>
+    </div>
+
+    <div id="drawer" aria-label="Agent lane settings">
+      <details class="drawer-section">
+        <summary class="drawer-summary"><span class="chevron">▸</span>Exec chain (fallback order, left → right)</summary>
+        <div class="drawer-body">
+          <div id="exec-chain-slots"></div>
+          <div class="drawer-row">
+            <button type="button" class="drawer-btn" id="exec-chain-add">+ add lane</button>
+            <button type="button" class="drawer-btn save" id="exec-chain-save">save</button>
+            <span class="drawer-status" id="exec-status"></span>
+          </div>
+        </div>
+      </details>
+
+      <details class="drawer-section">
+        <summary class="drawer-summary"><span class="chevron">▸</span>Review lane</summary>
+        <div class="drawer-body">
+          <div class="drawer-row">
+            <select id="review-lane">
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+              <option value="gemini">gemini</option>
+              <option value="glm">glm</option>
+              <option value="grok">grok</option>
+            </select>
+            <input type="text" id="review-model" placeholder="model">
+            <button type="button" class="drawer-btn save" id="review-save">save</button>
+            <span class="drawer-status" id="review-status"></span>
+          </div>
+        </div>
+      </details>
+
+      <details class="drawer-section">
+        <summary class="drawer-summary"><span class="chevron">▸</span>Run limits</summary>
+        <div class="drawer-body">
+          <div class="drawer-row">
+            <div class="num-field"><label for="num-fanout">fanout</label><input type="number" min="0" id="num-fanout"></div>
+            <div class="num-field"><label for="num-iterations">max iterations</label><input type="number" min="0" id="num-iterations"></div>
+            <div class="num-field"><label for="num-timeout">worker timeout (s)</label><input type="number" min="0" id="num-timeout"></div>
+            <div class="num-field"><label for="num-budget">budget (usd)</label><input type="number" min="0" id="num-budget"></div>
+            <button type="button" class="drawer-btn save" id="nums-save">save</button>
+            <span class="drawer-status" id="nums-status"></span>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="models" id="models" aria-label="Live per-model usage and notional cost">
+      <span class="lbl" title="Rolling 5-minute rate, extrapolated. Dollars are a NOTIONAL proxy, never a bill.">models · $/hr notional</span>
+      <div id="models-cells" style="display:flex;gap:8px 10px;flex-wrap:wrap;align-items:center"><span class="empty">no model usage yet</span></div>
+    </div>
+
+    <section class="panel" id="firehose" aria-label="Event firehose">
+      <h2>Firehose</h2>
+      <div class="fh-filters" aria-label="Firehose filters">
+        <div id="fh-kind-chips"></div>
+        <span class="fh-sep" aria-hidden="true"></span>
+        <div id="fh-worker-chips"></div>
+      </div>
+      <p class="muted hint" style="font-size:.78rem">Hover to pause auto-scroll · click a row for the raw event · capped at 500 lines.</p>
+      <div id="feed"></div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <span class="brand m">UNIMATRIX</span>
+      <span>Bash, jq and tmux. No MCP, no daemon, no database.</span>
+      <nav>
+        <a href="index.html">Home</a>
+        <a href="guide.html">Guide</a>
+      </nav>
+    </div>
+    <span class="note">Read-only surface — control stays in the Fable session / swarm-ctl.</span>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const $ = (s) => document.querySelector(s);
+  const panels = $('#panels');
+  const notice = $('#notice');
+  const feed = $('#feed');
+  let firstBusOk = null;   // null = not yet known, true/false after first /api/bus attempt
+  let busTimer, costTimer, modelsTimer, es;
+
+  function esc(s){
+    return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+
+  function degrade(){
+    panels.hidden = true;
+    notice.hidden = false;
+    if(busTimer) clearInterval(busTimer);
+    if(costTimer) clearInterval(costTimer);
+    if(modelsTimer) clearInterval(modelsTimer);
+    if(es) es.close();
+  }
+
+  // ---------- BOARD (compact strip: counts + warning chips) ----------
+  function itemLabel(i){
+    return typeof i === 'string' ? i : (i.id || i.name || i.file || i.lane || i.branch || JSON.stringify(i));
+  }
+
+  function warnChip(label, items){
+    if(!items || !items.length) return '';
+    const title = items.map(itemLabel).join(', ');
+    return `<span class="chip warn" title="${esc(title)}"><b>${items.length}</b>${esc(label)}</span>`;
+  }
+
+  function renderBoard(d){
+    const c = d.counts || d || {};
+    $('#c-queued').textContent = c.queued ?? 0;
+    $('#c-claimed').textContent = c.claimed ?? 0;
+    $('#c-done').textContent = c.done ?? 0;
+    $('#c-cancelled').textContent = c.cancelled ?? 0;
+
+    // server.mjs /api/bus emits snake_case keys: stale_leases, active_limits, parked. Hidden
+    // (empty string) when a bucket is empty — only non-empty warnings earn strip space.
+    $('#warn-chips').innerHTML = [
+      warnChip('stale', d.stale_leases),
+      warnChip('limited', d.active_limits),
+      warnChip('parked', d.parked),
+    ].join('');
+  }
+
+  async function pollBoard(){
+    if(firstBusOk === false) return;
+    try{
+      const r = await fetch('/api/bus');
+      if(!r.ok) throw new Error('bad status');
+      renderBoard(await r.json());
+      if(firstBusOk === null) firstBusOk = true;
+    }catch(e){
+      if(firstBusOk === null){ firstBusOk = false; degrade(); }
+      // later failures after a good first fetch: keep last-known state
+    }
+  }
+
+  // ---------- FIREHOSE ----------
+  let paused = false;
+  feed.addEventListener('mouseenter', () => paused = true);
+  feed.addEventListener('mouseleave', () => { paused = false; feed.scrollTop = feed.scrollHeight; });
+
+  const PALETTE = ['#34d399','#7dd3fc','#e0b34a','#f97066','#c084fc','#4ae0a8'];
+  function colorFor(id){
+    // ponytail: hash is deterministic — no cache needed, and an unbounded Map of branch ids
+    // would just be dead weight over a long-running cockpit.
+    let h = 0;
+    for(const ch of id) h = (h * 31 + ch.charCodeAt(0)) | 0;
+    return PALETTE[Math.abs(h) % PALETTE.length];
+  }
+
+  function truncate(s, n){ s = String(s); return s.length > n ? s.slice(0, n) + '…' : s; }
+
+  // Normalize a raw model string to a family key — MUST match server.mjs normalizeModel (spec 06).
+  function normalizeModel(raw){
+    if(!raw) return null;
+    const m = String(raw).toLowerCase();
+    if(m.includes('fable')) return 'claude-fable';
+    if(m.includes('opus')) return 'claude-opus';
+    if(m.includes('sonnet')) return 'claude-sonnet';
+    if(m.includes('haiku')) return 'claude-haiku';
+    if(m.includes('glm')) return 'glm';
+    if(m.includes('gemini')) return 'gemini';
+    if(m.includes('grok')) return 'grok';
+    if(m.includes('gpt') || m.includes('codex')) return 'codex';
+    return m;
+  }
+  const MODEL_COLORS = {
+    'claude-fable':'#f0abfc','claude-opus':'#c084fc','claude-sonnet':'#7dd3fc','claude-haiku':'#93a89c',
+    glm:'#34d399',gemini:'#e0b34a',codex:'#4ae0a8',grok:'#f97066',unknown:'#93a89c',
+  };
+  function modelColor(fam){ return MODEL_COLORS[fam] || '#93a89c'; }
+  // MUST match server.mjs modelOf — grok carries no model field except as the first key of an
+  // `end` event's `modelUsage` object.
+  function modelOf(o){
+    if(!o || typeof o !== 'object') return null;
+    if(typeof o.model === 'string') return o.model;
+    if(o.message && typeof o.message.model === 'string') return o.message.model;
+    if(o.modelUsage && typeof o.modelUsage === 'object'){
+      const k = Object.keys(o.modelUsage)[0];
+      if(k) return k;
+    }
+    return null;
+  }
+  // Carry the last-seen model per worker forward onto its token events (which carry no model of
+  // their own) — the client mirror of server.mjs's per-run carry-forward (spec 06 §A/D).
+  const lastModelByWorker = {};
+
+  function fmtTime(ts){
+    const d = ts ? new Date(ts) : null;
+    return d && !isNaN(d) ? d.toTimeString().slice(0, 8) : '--:--:--';
+  }
+
+  // Compact one-line-per-record view. The three worker CLIs (claude/glm, codex, gemini) each emit
+  // a different JSONL schema — this maps the ones actually seen on the bus to {badge, cls, text};
+  // anything else falls through to the raw-type/JSON-snippet case at the bottom.
+  function paramStr(p){
+    if(p == null) return '';
+    return typeof p === 'string' ? p : (() => { try { return JSON.stringify(p); } catch { return String(p); } })();
+  }
+  function contentToText(c){
+    if(c == null) return '';
+    if(typeof c === 'string') return c;
+    if(Array.isArray(c)) return c.map(x => typeof x === 'string' ? x : (x.text ?? JSON.stringify(x))).join(' ');
+    return JSON.stringify(c);
+  }
+  // "first meaningful line" — a tool result is often a multi-line dump; the summary row only
+  // needs the first line, the full text is still one click away via toggleExpand.
+  function firstLine(s){
+    s = String(s ?? '');
+    const nl = s.indexOf('\n');
+    return nl === -1 ? s : s.slice(0, nl) + ' …';
+  }
+  // tool_use is generic (name + full param JSON) except Bash, where the command IS the summary —
+  // showing the wrapping JSON just to say "Bash" is exactly the raw-JSON noise this exists to kill.
+  function toolUseText(name, input){
+    if(name === 'Bash' && input && typeof input.command === 'string') return input.command;
+    return `${name || 'tool'} ${paramStr(input)}`;
+  }
+
+  // A "success"-shaped type (result, item.completed) can still carry a failure — check the usual
+  // signal fields before defaulting to the green badge.
+  function looksFailed(...targets){
+    for(const t of targets){
+      if(!t || typeof t !== 'object') continue;
+      if(t.is_error) return true;
+      if(typeof t.subtype === 'string' && /error|fail/i.test(t.subtype)) return true;
+      if(typeof t.status === 'string' && /error|fail/i.test(t.status)) return true;
+      if(typeof t.exit_code === 'number' && t.exit_code !== 0) return true;
+    }
+    return false;
+  }
+
+  // claude: assistant/user envelopes carry the real event(s) nested in message.content[] blocks —
+  // a turn can mix thinking/text/tool_use/tool_result in one record. Classify every block, lead
+  // with the first one that has real content, and note how many others rode along.
+  function classifyBlock(b, envType){
+    if(b.type === 'tool_use') return { kind: 'tool_use', badge: 'tool_use', cls: 'b-blue', text: toolUseText(b.name, b.input) };
+    if(b.type === 'tool_result') return { kind: 'tool_result', badge: 'tool_result', cls: b.is_error ? 'b-red' : 'b-dim', text: firstLine(contentToText(b.content)) };
+    if(b.type === 'text' && b.text) return { kind: 'text', badge: envType === 'assistant' ? 'agent_message' : 'user', cls: 'b-green', text: b.text };
+    if(b.type === 'thinking' && b.thinking) return { kind: 'thinking', badge: 'thinking', cls: 'b-dim', text: b.thinking };
+    return null; // empty thinking block, or a block type we don't render — skip
+  }
+
+  function summarizeBlocks(blocks, envType){
+    const items = blocks.map((b) => classifyBlock(b, envType)).filter(Boolean);
+    if(!items.length) return { badge: envType, cls: 'b-dim', text: '(no text content)' };
+    const [primary, ...rest] = items;
+    if(!rest.length) return primary;
+    const counts = {};
+    for(const r of rest) counts[r.kind] = (counts[r.kind] || 0) + 1;
+    const suffix = Object.entries(counts).map(([k, n]) => `+${n} ${k}`).join(', ');
+    return { ...primary, text: `${primary.text} (${suffix})` };
+  }
+
+  function summarize(o){
+    const type = o.type || 'unknown';
+
+    if((type === 'assistant' || type === 'user') && o.message && Array.isArray(o.message.content)){
+      return summarizeBlocks(o.message.content, type);
+    }
+
+    switch(type){
+      case 'tool_use':
+        return { badge: 'tool_use', cls: 'b-blue', text: toolUseText(o.tool_name || o.name, o.parameters ?? o.input) };
+      case 'tool_result':
+        return { badge: 'tool_result', cls: looksFailed(o) ? 'b-red' : 'b-dim', text: firstLine(contentToText(o.output ?? o.content ?? o.result)) };
+      case 'tool_progress':
+        return { badge: 'progress', cls: 'b-dim', text: `${o.tool_name || o.name || 'tool'} running…` };
+      case 'system': {
+        // thinking_tokens is the noisiest system subtype by far — give it its own line so the
+        // coalesced row (see appendLine) reads as a token count, not a JSON blob.
+        if(o.subtype === 'thinking_tokens'){
+          const n = o.estimated_tokens ?? o.tokens ?? 0;
+          return { badge: 'thinking_tokens', cls: 'b-dim', text: `~${Number(n).toLocaleString()} tokens estimated` };
+        }
+        const numKey = Object.keys(o).find((k) => k !== 'type' && k !== 'subtype' && typeof o[k] === 'number');
+        const salient = numKey ? ` ${numKey}=${Number(o[numKey]).toLocaleString()}` : '';
+        return { badge: o.subtype || 'system', cls: 'b-dim', text: `${o.subtype || 'system'}${salient}` };
+      }
+      case 'result':
+        return { badge: 'result', cls: looksFailed(o) ? 'b-red' : 'b-green', text: firstLine(o.result ?? o.summary ?? JSON.stringify(o)) };
+      case 'turn.completed':
+        return { badge: 'turn.completed', cls: 'b-green', text: `usage: ${usageStr(o.usage)}` };
+      case 'error':
+      case 'turn.failed':
+        return { badge: type, cls: 'b-red', text: firstLine(o.message ?? o.error ?? JSON.stringify(o)) };
+      case 'thought':
+      case 'text':
+        return { badge: type, cls: type === 'text' ? 'b-green' : 'b-dim', text: o.data };
+      case 'end':
+        return { badge: 'end', cls: 'b-dim', text: `session ended${o.result ? ': ' + paramStr(o.result) : ''}` };
+      case 'message':
+        return { badge: 'message', cls: 'b-green', text: firstLine(contentToText(o.content)) };
+      case 'item.completed': {
+        const item = o.item ?? o.content;
+        return { badge: 'item.completed', cls: looksFailed(o, item) ? 'b-red' : 'b-green', text: firstLine(contentToText(item)) };
+      }
+      default:
+        // never the raw JSON body — a compact "type · keys" line instead.
+        return { badge: type, cls: 'b-dim', text: `${type} · ${Object.keys(o).filter((k) => k !== 'type').join(',')}` };
+    }
+  }
+
+  // Compact humanized usage line for turn.completed — same fields costSummary() sums server-side.
+  function usageStr(u){
+    if(!u || typeof u !== 'object') return '(none)';
+    const inTok = u.input_tokens ?? u.prompt_tokens ?? 0;
+    const outTok = u.output_tokens ?? u.completion_tokens ?? 0;
+    return `${fmtTok(inTok)} in / ${fmtTok(outTok)} out`;
+  }
+
+  // Coarse category for the firehose filter chips — derived from the fine-grained badge (not the
+  // raw `type`) so an assistant envelope whose PRIMARY block is e.g. a tool_use still files under
+  // "tools", matching what the row actually shows.
+  function kindFromBadge(badge){
+    if(badge === 'tool_use' || badge === 'tool_result') return 'tools';
+    if(badge === 'progress') return 'progress';
+    if(badge === 'thinking' || badge === 'thinking_tokens') return 'thinking';
+    if(badge === 'agent_message' || badge === 'user' || badge === 'result' || badge === 'message' || badge === 'item.completed') return 'text';
+    return 'system'; // turn.completed, end, error, turn.failed, other system subtypes, unknown
+  }
+
+  const RAW_CAP = 32 * 1024; // bound per-row memory; a truncated record just can't be pretty-printed
+
+  // One delegated listener instead of a closure-per-row — each closure would otherwise pin a full
+  // pretty-printed copy of its record for as long as the row lives (up to 500 rows deep).
+  feed.addEventListener('click', (ev) => {
+    const row = ev.target.closest('.fh-row');
+    if(row) toggleExpand(row);
+  });
+
+  function toggleExpand(row){
+    const next = row.nextElementSibling;
+    if(next && next.classList.contains('fh-detail')){ next.remove(); return; }
+    const raw = row.dataset.raw || '';
+    let pretty = raw;
+    if(row.dataset.truncated){
+      pretty = raw + '\n… (truncated, raw JSON not shown in full)';
+    } else {
+      try { pretty = JSON.stringify(JSON.parse(raw), null, 2); } catch { /* show as-is */ }
+    }
+    const pre = document.createElement('pre');
+    pre.className = 'fh-detail';
+    pre.textContent = pretty;
+    row.after(pre);
+  }
+
+  function capFeed(){
+    let rows = feed.querySelectorAll('.fh-row, .fh-raw');
+    while(rows.length > 500){
+      const first = rows[0];
+      if(first.nextElementSibling && first.nextElementSibling.classList.contains('fh-detail')) first.nextElementSibling.remove();
+      first.remove();
+      rows = feed.querySelectorAll('.fh-row, .fh-raw');
+    }
+  }
+
+  // ---------- FIREHOSE filter chips (kind + per-worker, persisted in localStorage) ----------
+  function loadJSON(key, fallback){
+    try { return { ...fallback, ...JSON.parse(localStorage.getItem(key)) }; } catch { return { ...fallback }; }
+  }
+  function saveJSON(key, val){
+    try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* private mode / quota — non-fatal */ }
+  }
+
+  const FH_KINDS = ['tools', 'text', 'thinking', 'system', 'progress'];
+  // thinking/progress start OFF — they're the coalesced heartbeat rows, opt-in to see them.
+  const kindState = loadJSON('unimatrix-fh-kinds', { tools: true, text: true, thinking: false, system: true, progress: false });
+  const workerState = loadJSON('unimatrix-fh-workers', {});
+  const seenWorkers = new Set();
+
+  function rowVisible(kind, worker){
+    return kindState[kind] !== false && workerState[worker] !== false;
+  }
+  function applyRowVisibility(el){
+    const visible = rowVisible(el.dataset.kind, el.dataset.worker);
+    el.style.display = visible ? '' : 'none';
+    if(!visible){
+      const next = el.nextElementSibling;
+      if(next && next.classList.contains('fh-detail')) next.remove();
+    }
+  }
+  function applyAllRowVisibility(){
+    feed.querySelectorAll('.fh-row, .fh-raw').forEach(applyRowVisibility);
+  }
+
+  function renderKindChips(){
+    $('#fh-kind-chips').innerHTML = FH_KINDS.map((k) =>
+      `<button type="button" class="fh-chip ${kindState[k] !== false ? 'on' : ''}" data-kind="${k}">${k.toUpperCase()}</button>`
+    ).join('');
+  }
+  $('#fh-kind-chips').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.fh-chip');
+    if(!btn) return;
+    const k = btn.dataset.kind;
+    kindState[k] = kindState[k] === false;
+    saveJSON('unimatrix-fh-kinds', kindState);
+    renderKindChips();
+    applyAllRowVisibility();
+  });
+
+  function renderWorkerChips(){
+    $('#fh-worker-chips').innerHTML = [...seenWorkers].map((w) =>
+      `<button type="button" class="fh-chip ${workerState[w] !== false ? 'on' : ''}" data-worker="${esc(w)}" style="border-color:${colorFor(w)}">${esc(w)}</button>`
+    ).join('');
+  }
+  $('#fh-worker-chips').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.fh-chip');
+    if(!btn) return;
+    const w = btn.dataset.worker;
+    workerState[w] = workerState[w] === false;
+    saveJSON('unimatrix-fh-workers', workerState);
+    renderWorkerChips();
+    applyAllRowVisibility();
+  });
+  function registerWorkerChip(worker){
+    if(!worker || seenWorkers.has(worker)) return;
+    seenWorkers.add(worker);
+    renderWorkerChips();
+  }
+  renderKindChips();
+
+  // ---------- coalescing: one LIVE row per (worker, streak) for any rapid same-type run ----------
+  // Rule of thumb: consecutive events, same worker, same raw `type` (+ same tool_use_id/subtype
+  // where present) = one row that updates in place with a spinner, instead of one row each. Covers
+  // system/thinking_tokens and tool_progress pings, and grok's thought/text delta-stream fragments.
+  // Excluded: types that are already one discrete, meaningful item, never a heartbeat/delta.
+  const NEVER_COALESCE_TYPES = new Set([
+    'assistant', 'user', 'result', 'turn.completed', 'error', 'turn.failed',
+    'end', 'item.completed', 'message', 'tool_result', 'tool_use',
+  ]);
+  // Delta-fragment types whose text should ACCUMULATE across the streak (grok's token-by-token
+  // thought/text stream); everything else (thinking_tokens, tool_progress, …) shows the latest
+  // value in place — concatenating those would just repeat the same status line.
+  const ACCUMULATE_TYPES = new Set(['thought', 'text']);
+  const activeCoalesce = new Map(); // worker -> {key, el, buffer}
+
+  function coalesceKeyOf(worker, obj){
+    const type = obj.type || 'unknown';
+    if(NEVER_COALESCE_TYPES.has(type)) return null;
+    const scope = obj.tool_use_id ? `:${obj.tool_use_id}` : (obj.subtype ? `:${obj.subtype}` : '');
+    return `${worker}:${type}${scope}`;
+  }
+
+  // Ends a worker's active streak (a non-matching event arrived, or the stream itself ended):
+  // freezes the row by removing its spinner. The final text/state stays exactly as last rendered.
+  function finalizeCoalesce(worker){
+    const prev = activeCoalesce.get(worker);
+    if(prev){
+      const spin = prev.el.querySelector('.fh-spin');
+      if(spin) spin.remove();
+    }
+    activeCoalesce.delete(worker);
+  }
+
+  function rowInnerHtml(obj, worker, recvTs, badge, cls, text, live){
+    // model chip: this line's own model, else the last one seen for this worker (spec 06 §D).
+    const rawModel = modelOf(obj);
+    if(rawModel) lastModelByWorker[worker] = rawModel;
+    const fam = normalizeModel(rawModel || lastModelByWorker[worker]);
+    const chip = fam
+      ? `<span class="mchip" style="color:${modelColor(fam)}">${esc(fam)}</span>`
+      : '<span class="mchip" style="visibility:hidden">·</span>';
+    // real clock even for token events with no own timestamp: fall back to server receive time.
+    const timeStr = fmtTime(obj.timestamp ?? recvTs);
+    const spin = live ? '<span class="fh-spin" aria-label="streaming">●</span>' : '';
+    return `
+        <span class="fh-time">${esc(timeStr)}</span>
+        <span class="fh-branch" style="color:${colorFor(worker || '?')}">${esc(worker || '?')}</span>
+        ${chip}
+        <span class="fh-badge ${cls}">${esc(badge)}</span>
+        <span class="fh-sum">${esc(truncate(text ?? '', 140))}${spin}</span>`;
+  }
+
+  function appendLine(raw){
+    // server.mjs /api/stream sends each SSE event as a JSON envelope {worker, line} where `line`
+    // is the parsed JSONL object (or a raw string for a malformed source line).
+    let worker = '', lineVal = raw, recvTs = null;
+    try {
+      const envelope = JSON.parse(raw);
+      worker = envelope.worker || '';
+      lineVal = envelope.line;
+      recvTs = envelope.ts ?? null;
+    } catch { /* not an envelope — treat raw as the line itself */ }
+
+    let obj = typeof lineVal === 'object' && lineVal !== null ? lineVal : null;
+    if(!obj && typeof lineVal === 'string'){
+      try { obj = JSON.parse(lineVal); } catch { /* genuinely not JSON */ }
+    }
+
+    registerWorkerChip(worker);
+
+    if(obj){
+      const { badge, cls, text } = summarize(obj);
+      const kind = kindFromBadge(badge);
+      const rawStr = (() => { try { return JSON.stringify(obj); } catch { return String(obj); } })();
+      const truncated = rawStr.length > RAW_CAP;
+      const rawStored = truncated ? rawStr.slice(0, RAW_CAP) : rawStr;
+
+      const ckey = coalesceKeyOf(worker, obj);
+      const prev = activeCoalesce.get(worker);
+
+      if(ckey && prev && prev.key === ckey){
+        prev.buffer = ACCUMULATE_TYPES.has(obj.type) ? prev.buffer + text : text;
+        prev.el.innerHTML = rowInnerHtml(obj, worker, recvTs, badge, cls, prev.buffer, true);
+        prev.el.dataset.raw = rawStored;
+        if(truncated) prev.el.dataset.truncated = '1'; else delete prev.el.dataset.truncated;
+        applyRowVisibility(prev.el);
+        if(!paused) feed.scrollTop = feed.scrollHeight;
+        return;
+      }
+
+      // Not a continuation — the previous streak (if any) for this worker is done; freeze it.
+      finalizeCoalesce(worker);
+
+      const el = document.createElement('div');
+      el.className = 'fh-row';
+      el.dataset.kind = kind;
+      el.dataset.worker = worker;
+      el.innerHTML = rowInnerHtml(obj, worker, recvTs, badge, cls, text, !!ckey);
+      // Store the compact raw line (not a pretty copy) for the click-to-expand detail view;
+      // JSON.parse + pretty-print happens lazily in toggleExpand, only for rows someone opens.
+      el.dataset.raw = rawStored;
+      if(truncated) el.dataset.truncated = '1';
+
+      feed.appendChild(el);
+      applyRowVisibility(el);
+      if(ckey) activeCoalesce.set(worker, { key: ckey, el, buffer: text });
+    } else {
+      finalizeCoalesce(worker);
+      const el = document.createElement('div');
+      el.className = 'fh-raw';
+      el.dataset.kind = 'system';
+      el.dataset.worker = worker;
+      el.textContent = truncate(typeof lineVal === 'string' ? lineVal : String(lineVal), 300);
+      feed.appendChild(el);
+      applyRowVisibility(el);
+    }
+
+    capFeed();
+    if(!paused) feed.scrollTop = feed.scrollHeight;
+  }
+
+  let sseConnected = false; // false until the first 'open' — a later open means it reconnected
+  let sseLastSeen = Date.now(); // last message/ping — feeds the zombie-socket watchdog below
+
+  function startStream(){
+    es = new EventSource('/api/stream');
+    es.onopen = () => {
+      // server.mjs starts every /api/stream connection tailing from byte 0 of each run-*.jsonl —
+      // a reconnect (drop, tab sleep, server restart) replays the whole bus. Without this the
+      // firehose would double up every record seen before the drop.
+      if(sseConnected){ feed.innerHTML = ''; activeCoalesce.clear(); }
+      sseConnected = true;
+      sseLastSeen = Date.now();
+    };
+    es.onmessage = (ev) => { sseLastSeen = Date.now(); appendLine(ev.data); };
+    // server heartbeats arrive as a named 'ping' event every 15s (SSE comments are invisible to
+    // EventSource, so the watchdog needs a real event to observe liveness).
+    es.addEventListener('ping', () => { sseLastSeen = Date.now(); });
+    es.onerror = () => {}; // EventSource auto-reconnects; ignore transient drops
+  }
+
+  // Zombie-socket watchdog: over WSL mirrored loopback (Windows Chrome -> WSL server) a killed
+  // server can vanish without an RST — the EventSource never errors, never reconnects, and the
+  // firehose silently freezes while short-lived polls keep working. Heartbeats come every 15s;
+  // >45s of silence means the socket is dead — tear it down and reconnect.
+  setInterval(() => {
+    if(es && Date.now() - sseLastSeen > 45000){
+      try { es.close(); } catch { /* already dead */ }
+      startStream();
+    }
+  }, 10000);
+
+  // ---------- COST ----------
+  function sumNums(o){
+    return Object.values(o).filter((v) => typeof v === 'number').reduce((a, b) => a + b, 0);
+  }
+
+  function fmtTok(n){ return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
+
+  function renderCost(d){
+    // server.mjs /api/cost emits { lanes: [{lane, tokens}, …] }.
+    const totals = ((d && d.lanes) || [])
+      .map((x) => [x.lane, typeof x.tokens === 'number' ? x.tokens : sumNums(x.tokens || {})]);
+    const el = $('#cost-inline');
+    if(!totals.length){ el.textContent = 'no usage yet'; el.title = ''; return; }
+    el.textContent = totals.map(([lane, n]) => `${lane} ${fmtTok(n)}`).join(' · ');
+    el.title = totals.map(([lane, n]) => `${lane}: ${Number(n).toLocaleString()} tok`).join('\n');
+  }
+
+  async function pollCost(){
+    if(firstBusOk === false) return;
+    try{
+      const r = await fetch('/api/cost');
+      if(!r.ok) throw new Error('bad status');
+      renderCost(await r.json());
+    }catch(e){ /* keep last-known bars */ }
+  }
+
+  // ---------- MODELS (live per-model notional $/hr, spec 06) ----------
+  function fmtRate(n){ return n >= 100 ? '$' + Math.round(n) : '$' + Number(n).toFixed(2); }
+
+  function renderModels(d){
+    const cells = $('#models-cells');
+    const models = (d && d.models) || [];
+    if(!models.length){ cells.innerHTML = '<span class="empty">no model usage yet</span>'; return; }
+    cells.innerHTML = models.map((m) => {
+      const fam = m.model || 'unknown';
+      const live = m.running || m.dollars_per_hour > 0;
+      const rate = m.unpriced ? '<span class="unpriced" title="no notional price for this model">unpriced</span>'
+                              : `<b class="mrate">${fmtRate(m.dollars_per_hour)}/hr</b>`;
+      return `<span class="mcell ${live ? 'live' : 'idle'}" title="${esc(fam)}: ${Number(m.tokens_5m).toLocaleString()} tok in last ${d.window_min||5}m · ${Number(m.tokens_total).toLocaleString()} tok total${m.notional===false?'':' · notional'}">
+        <span class="dot"></span>
+        <span class="mname" style="color:${modelColor(fam)}">${esc(fam)}</span>
+        ${rate}
+        <span class="mtok">${fmtTok(m.tokens_5m)}/5m</span>
+      </span>`;
+    }).join('');
+  }
+
+  async function pollModels(){
+    if(firstBusOk === false) return;
+    try{
+      const r = await fetch('/api/models');
+      if(!r.ok) throw new Error('bad status');
+      renderModels(await r.json());
+    }catch(e){ /* keep last-known cells */ }
+  }
+
+  // ---------- AGENTS drawer (GET/POST /api/config — the one write surface on this page) ----------
+  const AGENT_LANES = ['claude', 'codex', 'gemini', 'glm', 'grok'];
+  let execSlots = []; // [{lane, model}] — mirrors the EXEC_CHAIN input rows
+
+  function parseLaneModel(s){
+    const i = s.indexOf(':');
+    return i === -1 ? { lane: 'claude', model: s } : { lane: s.slice(0, i), model: s.slice(i + 1) };
+  }
+
+  function setDrawerStatus(section, msg, isErr){
+    const el = $(`#${section}-status`);
+    if(!el) return;
+    el.textContent = msg;
+    el.className = 'drawer-status' + (msg ? (isErr ? ' err' : ' ok') : '');
+  }
+
+  function laneOptions(selected){
+    return AGENT_LANES.map((l) => `<option value="${l}" ${l === selected ? 'selected' : ''}>${l}</option>`).join('');
+  }
+
+  function renderExecChain(){
+    $('#exec-chain-slots').innerHTML = execSlots.map((s, i) => `
+      <div class="chain-row" data-i="${i}">
+        <select class="lane-sel">${laneOptions(s.lane)}</select>
+        <input type="text" class="model-in" value="${esc(s.model)}" placeholder="model">
+        <button type="button" class="rm-btn" aria-label="remove lane">×</button>
+      </div>`).join('');
+  }
+
+  // captures current DOM edits back into execSlots before add/remove re-renders (so in-progress
+  // edits in other rows survive), and is also how save reads the values to POST.
+  function captureExecSlots(){
+    execSlots = [...document.querySelectorAll('#exec-chain-slots .chain-row')].map((row) => ({
+      lane: row.querySelector('.lane-sel').value,
+      model: row.querySelector('.model-in').value,
+    }));
+  }
+
+  $('#exec-chain-add').addEventListener('click', () => {
+    captureExecSlots();
+    execSlots.push({ lane: 'claude', model: '' });
+    renderExecChain();
+  });
+  $('#exec-chain-slots').addEventListener('click', (ev) => {
+    if(!ev.target.classList.contains('rm-btn')) return;
+    captureExecSlots();
+    execSlots.splice(Number(ev.target.closest('.chain-row').dataset.i), 1);
+    renderExecChain();
+  });
+
+  async function postConfig(key, value){
+    const r = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error(body.error || `save failed (${r.status})`);
+    return body;
+  }
+
+  // Every /api/config response (GET or POST) is the FULL allowlisted snapshot — apply it to all
+  // three sections every time so a save in one section never leaves the others stale.
+  function applyDrawerConfig(cfg){
+    execSlots = (cfg.EXEC_CHAIN || '').split(/\s+/).filter(Boolean).map(parseLaneModel);
+    renderExecChain();
+    const rv = parseLaneModel(cfg.REVIEW || '');
+    $('#review-lane').value = rv.lane;
+    $('#review-model').value = rv.model;
+    $('#num-fanout').value = cfg.FANOUT ?? '';
+    $('#num-iterations').value = cfg.MAX_ITERATIONS ?? '';
+    $('#num-timeout').value = cfg.WORKER_TIMEOUT_SEC ?? '';
+    $('#num-budget').value = cfg.BUDGET_USD ?? '';
+  }
+
+  async function loadDrawerConfig(){
+    try{
+      const r = await fetch('/api/config');
+      if(!r.ok) throw new Error('bad status');
+      applyDrawerConfig(await r.json());
+    }catch(e){
+      setDrawerStatus('exec', 'failed to load config', true);
+    }
+  }
+
+  $('#exec-chain-save').addEventListener('click', async () => {
+    captureExecSlots();
+    const value = execSlots.filter((s) => s.model.trim()).map((s) => `${s.lane}:${s.model.trim()}`).join(' ');
+    try{
+      applyDrawerConfig(await postConfig('EXEC_CHAIN', value));
+      setDrawerStatus('exec', 'saved');
+    }catch(e){ setDrawerStatus('exec', e.message, true); }
+  });
+
+  $('#review-save').addEventListener('click', async () => {
+    const value = `${$('#review-lane').value}:${$('#review-model').value.trim()}`;
+    try{
+      applyDrawerConfig(await postConfig('REVIEW', value));
+      setDrawerStatus('review', 'saved');
+    }catch(e){ setDrawerStatus('review', e.message, true); }
+  });
+
+  $('#nums-save').addEventListener('click', async () => {
+    const fields = [
+      ['FANOUT', '#num-fanout'], ['MAX_ITERATIONS', '#num-iterations'],
+      ['WORKER_TIMEOUT_SEC', '#num-timeout'], ['BUDGET_USD', '#num-budget'],
+    ];
+    // Capture every field's value up front, before any await — applyDrawerConfig() below resets
+    // these same inputs after each save, so reading mid-loop could pick up an already-reset value.
+    const toSave = fields.map(([key, sel]) => [key, $(sel).value.trim()]).filter(([, v]) => v !== '');
+    try{
+      let cfg = null;
+      for(const [key, v] of toSave) cfg = await postConfig(key, v);
+      if(cfg) applyDrawerConfig(cfg);
+      setDrawerStatus('nums', 'saved');
+    }catch(e){ setDrawerStatus('nums', e.message, true); }
+  });
+
+  const drawer = $('#drawer');
+  const settingsToggle = $('#settings-toggle');
+  settingsToggle.addEventListener('click', () => {
+    const open = drawer.classList.toggle('open');
+    settingsToggle.classList.toggle('on', open);
+    settingsToggle.setAttribute('aria-expanded', String(open));
+    if(open){
+      loadDrawerConfig();
+      // all three accordion sections start collapsed every time the drawer opens
+      drawer.querySelectorAll('details.drawer-section').forEach((d) => { d.open = false; });
+    }
+  });
+
+  pollBoard();
+  busTimer = setInterval(pollBoard, 2000);
+  costTimer = setInterval(pollCost, 10000);
+  modelsTimer = setInterval(pollModels, 5000);
+  pollCost();
+  pollModels();
+  startStream();
+})();
+</script>
+</body>
+</html>
