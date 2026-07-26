@@ -397,3 +397,64 @@ gate already rejects them), breaks spec 01 FR-12's timeout salvage (a killed wor
 Cancelled by construction), and contradicts spec 14's Non-Goals. Backlog 53's actual root cause was
 a **shared write cage** plus this loose `find` — closed by spec 14 FR-2 and the alignment above. Any
 future revival must be scoped to non-salvage write paths only.
+
+## Amendment — 2026-07-26 (FR-R15 defense-in-depth: bare sidecar tokens resolve at consumption)
+
+A `.lane`/`.chain` sidecar can hold a BARE lane token (e.g., `codex`, `kimi` — no `:<model>` pair). When
+such a token reaches `lane_cmd()` in `src/swarm-lib.sh:906`, the line
+
+```bash
+model="${lanemodel#*:}"
+```
+
+degenerates a bare token to itself: parameter expansion removes everything up to and including a
+colon, but with no colon present, the token is unchanged. The lane CLI is then invoked with the lane
+name as a literal MODEL id (e.g., `claude -p --model codex`), yielding:
+- **codex**: `'codex' model is not supported`
+- **kimi**: Moonshot 400 Unknown Model error
+
+This burns all retries and marks the lane `.broken` after 3 strikes. Recurred in two independent runs
+on 2026-07-26 (gtm-runq, fleetops016) **after** feedback was filed from the first, proving the
+gap is not self-healing.
+
+**FR-R2's sidecar contract is unchanged:** tokens SHOULD be full `lane:model` pairs. **FR-R15 (new
+requirement)** is a defense-in-depth resolution layer at the one choke point ALL sidecar paths pass
+through:
+
+1. The **dispatch choke point MUST detect a colon-less token** before any claim is written.
+   (Shipped 2026-07-26 in `_try_claim_one`, swarm-run.sh — one step upstream of `lane_cmd()`, which
+   the E5 forensics showed is strictly better than in-`lane_cmd` detection: normalizing before
+   `claim` also keeps the claim filename parseable by `_claim_meta`, whose regex requires the
+   colon — a bare-token claim otherwise returns `lane=""` and blinds the reap/liveness guards.)
+2. **Resolve it through `_call_lane_token`** (which resolves a bare lane via
+   `_verify_default_model` — the same canonical lane→model table FR-R2's `.chain` seed resolution
+   already uses), yielding a full `lane:model` pair.
+3. **Emit ONE loud stderr line** naming the card id, the bare token, and the resolved model:
+   ```
+   lane_cmd: card <id>: bare token '<token>' resolved to '<resolved_lane:model>' (sidecar malformed; consider fixing the source)
+   ```
+4. **Never silently accept a token-as-model.** Rationale: one hand-written sidecar must not park a
+   card when the canonical default is knowable; the loud line preserves the signal that the sidecar
+   is malformed and the source should fix it.
+
+After resolution, the full pair is used for all downstream invocations — the lane CLI sees the
+correct model, the work proceeds, and the issue is logged for operator inspection.
+
+**Acceptance criteria:**
+- [ ] **Bare-token resolution:** A bats case per lane class (codex, kimi, claude, grok) writes a
+      `.chain` sidecar with a BARE token, invokes `lane_cmd`, and asserts that the bare token is
+      resolved to the table default (e.g., bare `codex` → `codex:default`, bare `kimi` → `kimi:kimi-k3`)
+      and never to the token itself as a model.
+- [ ] **Loud signal:** Each resolution emits an stderr line matching the pattern above, carrying the
+      card id, original bare token, and resolved pair.
+- [ ] **No degradation of full pairs:** Existing `.chain` sidecars with full `lane:model` pairs and
+      hard `.lane` pins behave exactly as before — zero new stderr lines for these cases, and the
+      model is not re-resolved.
+- [ ] **Validator remains:** `_call_lane_token()` in `swarm-run.sh` (the cmd_call input guard) is
+      unchanged and remains the planning-time validator; this amendment moves the consumption-time
+      invariant to the runtime choke point, orthogonal to pre-validation.
+
+**Relationship:** This amendment operationalizes the _one_ place every sidecar path converges
+(`lane_cmd`, src/swarm-lib.sh:906) as a guard. The validator `_call_lane_token()` (swarm-run.sh) remains the
+cmd_call input guard; this amendment fixes the invariant the executor never violates — a bare
+token is never passed to a lane CLI as a model literal.

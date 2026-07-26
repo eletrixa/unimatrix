@@ -5,6 +5,95 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), versioned with 
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-26
+
+### What's new (for humans)
+- **Run several swarms at once without them trampling each other**: start each with
+  `--run <name>` and every run gets its own workspace, its own cost ledger, and a guard that
+  refuses to start on top of a run that's still alive.
+- **Dead AI lanes are caught in seconds, not minutes**: before the first task goes to a lane,
+  a one-token health check runs automatically — a lane whose login expired is routed around
+  instead of eating three failed attempts per task.
+- **A worker can no longer take credit for a teammate's work**: when two tasks share one
+  folder, each must show its own edits to count as done — "I did it" with nothing written now
+  fails loudly.
+- **Honest prices on every lane**: costs are now computed at each provider's own price list
+  (one lane was billed at ~3× the right price at the wrong provider), and every cost row says
+  where its number came from.
+- **Fewer mystery failures**: a hand-written shorthand lane name no longer crashes the
+  provider, simultaneous logins no longer trip each other at startup, and the codex reviewer
+  now runs at full reasoning strength instead of silently at none.
+
+### Added
+- **Plan-005 wave 0 — six spec rulings landed** (all authored by the haiku prose-trial lane,
+  cross-verified by codex, adjudicated + gate-fixed by the orchestrator): spec 10 FR-R15 (bare
+  sidecar tokens resolve loudly at `lane_cmd`), spec 13 FR-6 (event-fired auto live-probes,
+  once per lane per run), spec 04 amendment (codex scratch-home `config.toml` mirror — fixes
+  silent `reasoning_effort:none` on bus-spawned review cards — plus same-lane first-spawn
+  stagger), spec 08 amendment 2026-07-26b (uniform `tokens_reasoning` extraction), spec 14
+  FR-8 (per-card write-journal so shared cages stop blessing zero-write cards), and NEW spec
+  20 (Draft then, activated same day — see the `--run` entry below): per-run bus namespacing via
+  one `--run <label>` with live-heartbeat collision refusal (backlog 11/21).
+- **USD-as-proxy pricing on every lane** (spec 08 amendment 2026-07-26, operator directive):
+  every speedwars row now carries a `cost_usd` at the serving provider's OWN list price plus a
+  `cost_basis` tag (`envelope-list` / `envelope-pool` / `recomputed-list` /
+  `unpriced-tier-unknown`) — subscription and quota lanes included, so dollars become the
+  cross-lane proxy for pool draw. codex is now priced (gpt-5-codex list, fresh-vs-cached input
+  split); grok gets a recomputed fallback when the envelope omits its pool estimate; gemini
+  stays deliberately unpriced until the key's tier is recorded.
+- **`--run <label>` — concurrent swarms stop colliding on one bus** (spec 20, Active; backlog
+  11/21): one flag atomically derives `BUSDIR=.bus-<label>` and `SPEEDWARS_RUN=<label>` on both
+  `swarm-run.sh` and `swarm-loop.sh` (loop iterations pass it through), so the two can never
+  drift apart again; explicit env vars still win per the spec 04 precedence doctrine. A bus whose
+  spec-11 heartbeat is live (<60s) refuses new work loudly — accidental double-invocations die at
+  the door, while stale buses resume; swarm-loop's own iterations assert ownership of their
+  parent's bus via `UNIMATRIX_BUS_OWNER=1`. `call` honors the derivation too (it no longer
+  clobbers it with its cwd-local default). Ground Control's multi-bus fleet view is staged as its
+  own cockpit wave (spec 20 FR-7).
+- **Dead lanes are caught before any worker spawns** (spec 13 FR-6, backlog 58): `doctor
+  --live`'s probes now fire automatically — once per lane per run, at the lane's first claim
+  (pre-claim) and on a lane's first instant-error (reactive) — feeding the existing
+  `.broken`/`.dead`/`.limited` routing. A card seeded onto a dead cheap lane fails over
+  immediately instead of burning `MAX_LANE_RETRIES` there first (run brain058 seeded 8 cards
+  grok/glm-first and executed 0 there — this closes that hole). New conf knob `PROBE_AUTO`
+  (default 1); probes never rewrite existing health markers; each billable probe lands in the
+  run ledger.
+
+### Fixed
+- **Shared write cages no longer bless narration-only cards** (spec 14 FR-8, backlog 59): two
+  cards sharing one `.write` target used to satisfy each other's diff gate — a worker that only
+  talked finalized `done` on its sibling's bytes (the W3D1 false-done shape). The gate now derives
+  each card's own write-journal from its archived worker stream (claude-binary lanes) and, in a
+  shared cage, requires the card's OWN surviving in-cage writes; an empty journal fails loudly
+  with the W3D1 signature named. Finished siblings count as sharing too (their archived
+  `write-*.txt` sidecars), closing the fast-writer race.
+- **Same-lane auth herd tamed** (spec 04 amendment 2026-07-26, backlog 20): N simultaneous first
+  spawns on one lane used to hit the provider's auth gate at t=0 ("Not signed in" ×4, grok,
+  live). The first worker per lane per run now starts alone; same-lane followers wait — bounded
+  by new conf knob `STAGGER_FIRST_SPAWN_SEC` (default 10s, 0 = off) — until the first worker
+  produces output, then launch unrestricted. Cross-lane parallelism untouched.
+- **Bus-spawned codex workers no longer run at `reasoning_effort:none`** (spec 04 amendment
+  2026-07-26, backlog 49): the codex scratch-home cage copied only `auth.json`, so the caged CLI
+  ignored the operator's `~/.codex/config.toml` and silently fell back to no reasoning — a
+  quality downgrade on every REVIEW-lane card. The codex arm of `_scratch_home` now mirrors
+  `config.toml` when present. Codex arm ONLY: grok's config exclusion stays a locked containment
+  decision (its config wires MCP servers into the cage), claude's arm is untouched.
+- **Bare sidecar lane tokens no longer 400 the lane** (spec 10 FR-R15, backlog 62): a `.lane`/
+  `.chain` sidecar holding `glm` or `kimi` without `:model` used to reach the provider as a
+  literal model id (Z.ai 1211 / Moonshot 404), burn all retries, and mark the lane broken —
+  this was the entire "glm HTTP-400 unreliability" cluster. `_try_claim_one` now normalizes
+  bare tokens through `_call_lane_token` with one loud stderr line before any claim, which also
+  keeps claim filenames parseable by `_claim_meta` (bare-token claims used to return an empty
+  lane and blind the reap/liveness guards).
+- **glm cost was priced at the wrong provider**: the lane rides the claude binary, so its
+  envelope `total_cost_usd` is Anthropic-list pricing against a swapped base URL. glm rows are
+  now always recomputed at Z.ai API list ($1.40/$0.26/$4.40 per M) — the operator's local
+  ledger backfill showed the old figures overstated glm ~3× ($109.41 claude-priced → $34.89
+  Z.ai-list across 130 rows).
+- `docs/lane-economics.md` decision table: claude and gemini rows claimed "no dedicated
+  failover arm" — those arms shipped with spec 10 FR-R8 (`limit_error()`); table now points at
+  the live code, and ledger-wording column updated for dollars-as-proxy.
+
 ## [1.2.0] - 2026-07-26
 
 ### What's new (for humans)

@@ -1,6 +1,6 @@
 ---
 name: unimatrix
-version: 1.2.0
+version: 1.3.0
 description: Plan AND operate unimatrix swarm runs — decomposition, lane assignment, bus setup, gates, monitoring, troubleshooting, evidence, and the cross-repo feedback drop-box. Use when Fable is about to orchestrate work through the unimatrix file-bus (/swarm, /swarm-loop, swarm-run.sh, write-capable lanes, cross-model review), when the user says "use unimatrix", "swarm this", "plan the swarm", "check the swarm", when operating or debugging a live run, or when any agent in any repo wants to send unimatrix feedback. Self-improving — append lessons after every run.
 ---
 
@@ -52,8 +52,9 @@ Operating/debugging a live run: jump to §6. Sending feedback from another repo:
 |---|---|---|
 | Needs on-box private data (transcripts, credentials, browser, repos/ clones) | claude session agents / Fable | data never leaves the box |
 | Pure-function code from a tight spec | glm write lane | cheap, good at contained TDD |
-| Self-contained UI/render/CLI code | grok write lane (CODE cards only — prose/meta cards pin claude:sonnet, grok false-done prose class) or glm | speed |
+| Self-contained UI/render/CLI code | grok write lane (**C1 CODE cards only** — C2+ code, prose, and meta cards pin claude:sonnet; grok's false-done class covers prose AND code cards, 2026-07-26) or glm | speed |
 | Review / audit / adversarial verify | codex (REVIEW default) + the lanes that did NOT write the card | judge ≠ executor, always |
+| (kimi = CLASS_REVIEW failover seat) | unexercised as of 2026-07-26 — 0 review cards ever served; its first real exercise will be a codex outage, so treat its review quality as unproven until then | dated observation |
 | Web research | gemini (read-only; docker sandbox if unattended) | its niche |
 | Highest-wreckage-risk core (process lifecycle, orchestration) | strongest claude tier in session | blast radius |
 | Cheapest-capable exec (pick the cheapest model you are ≥90% confident lands the card) | claude haiku→sonnet→opus ladder (EXEC_CHAIN rung order) | escalate only on execution feedback |
@@ -70,6 +71,11 @@ Operating/debugging a live run: jump to §6. Sending feedback from another repo:
 
 - Every swarm card gets a **fallback**: next lane in chain, then Fable executes directly.
   Pin with `<id>.lane` only when you mean "park loudly rather than switch".
+- **Pin discipline (2026-07-26 audit):** cheap-first `.chain` is the default for everything except
+  prose/meta and C3+ cards — reflexive hard `claude:sonnet` pins were the top worker-cost driver
+  (247 sonnet-pinned vs 45 chain-routed cards, 2026-07-26 ledger). The C-label→lane map above was
+  recalibrated against speedwars outcome rows 2026-07-26 and matched the evidence — next
+  recalibration when the ledger says otherwise, not on vibes.
 - Confidentiality boundary is per-card, explicit: external lanes (glm/grok/codex/gemini)
   see only the paths you list in the prompt. Name the forbidden paths in the card.
 - **grok write cards:** No path confinement on write tools — the CLI doesn't support path-scoped
@@ -79,9 +85,12 @@ Operating/debugging a live run: jump to §6. Sending feedback from another repo:
 
 ## 3. Bus + env hygiene
 
-- **Per-run bus namespace**: `BUSDIR=<unimatrix>/.bus-<runlabel>` (ext4 only, never
-  /mnt/*). Two runs on one bus = renumber collisions, verify noise, cleanup cards
-  (aiact-054 + brain-053 both paid this tax).
+- **Per-run bus namespace**: `./swarm-run.sh --run <label>` (spec 20, since 2026-07-26) derives
+  `BUSDIR=.bus-<label>` + `SPEEDWARS_RUN=<label>` atomically — prefer it over hand-set env pairs
+  (they drift; that drift was backlog 21). ext4 only, never /mnt/*. A bus with a LIVE heartbeat
+  refuses a second run — that refusal is the collision guard working, not a bug; loop children
+  bypass via `UNIMATRIX_BUS_OWNER=1` (already wired). Two runs on one bus = renumber collisions,
+  verify noise, cleanup cards (aiact-054 + brain-053 both paid this tax).
 - Env per run: `FANOUT` (≥6 once bus is namespaced), `WORKER_TIMEOUT_SEC` ≥900 for
   write/TDD cards (600 killed real work), `MON_AUTOOPEN=0` when unattended.
 - Write cards: `<id>.write` sidecar = target dir. Before parking a timed-out write
@@ -156,7 +165,9 @@ chain; grok-first recommended on a fully-authed box, prose pins claude:sonnet) �
 (0 = uncapped; also gates fallback INTO kimi — the one real-PAYG lane) · `FANOUT` · `LEASE_MIN` ·
 `WORKER_TIMEOUT_SEC` · `MAX_LANE_RETRIES` · `VERIFY_MAP` · `LEDGER_AUTO` · `GEMINI_SANDBOX`
 (docker for unattended) · `MON_PORT`/`MON_AUTOOPEN` · `GLM_MAX_THINKING_TOKENS`/
-`KIMI_MAX_THINKING_TOKENS` (thinking-flood caps) · `GROK_EFFORT` · spec 11: `PLAN_CHAIN`/
+`KIMI_MAX_THINKING_TOKENS` (thinking-flood caps) · `GROK_EFFORT` · `PROBE_AUTO` (spec 13 FR-6
+auto live-probes, default 1) · `STAGGER_FIRST_SPAWN_SEC` (auth-herd stagger, default 10) ·
+spec 11: `PLAN_CHAIN`/
 `ORCH_CHAIN`/`ORCH_TAKEOVER_MIN` (succession). Precedence: env > swarm.conf > baked default.
 
 ### Bus layout (`$BUSDIR`)
@@ -189,6 +200,9 @@ src/swarm-ctl heartbeat · watchdog-arm|watchdog-check|watchdog-disarm   # spec 
 ```
 
 ### Troubleshoot (evidence first — never trust bus state or lane claims)
+
+**Never read a raw `run-*.jsonl` into context** (~564k tokens each) — pull exactly what you need
+with `jq` filters or `src/swarm-ctl` verbs (`postmortem`, `status`, the firehose filter).
 
 | Symptom | Likely class | Move |
 |---|---|---|
@@ -223,7 +237,8 @@ Standing rules:
   <YYYY-MM-DD>`, or `dismissed (<why>)`) written **before** the `mv` — never archive un-triaged.
 - A file with `status: draft` in its frontmatter is a machine-drafted stub, not a finished report:
   confirm it (strip the `status` line, triage normally) or delete it — never silently archive a
-  draft as-is.
+  draft as-is. Confirming needs no prose ceremony: the `triaged-to:` key IS the confirmation —
+  never append a redundant "Confirmed" paragraph to the stub body.
 - Backlog ids are permanent — never renumber or delete a row, mark it `**DONE** via spec NN` at
   spec close instead. A backlog DONE-sweep is part of run close-out evidence (§5).
 
@@ -572,3 +587,47 @@ Standing rules:
   structural-miss) on a $0 subscription found what 85 green tests + 18 green site checks
   couldn't: transactions riding a bare pg.Pool by accidental sequential client reuse, and a
   produced-set ∩ read-set = ∅ table (card_wide). Structural-miss earns its standing seat again.
+- **2026-07-26 gtm-precheck (refinery pre-check station, TDD ladder on a shared checkout):** (a) RED/GREEN
+  wave split maps cleanly onto the bus — test-only cards first, orchestrator confirms exactly-the-new-tests
+  red, then impl cards; the staged-specs trick (write next wave's prompts into specs/ mid-run, they sweep
+  only on the NEXT invocation; hold cards that must wait in a hold/ dir) gives clean wave barriers with zero
+  driver support. (b) grok went 5/5 clean on code cards with the artifacts-first preamble pinned from seed
+  time (not as a retry) — the preamble belongs in every grok card's first line, not in the recovery playbook.
+  (c) Compile-coupled-test misses recurred (station-keys.test hard-coding a KEY_ROUTES expectation) — grep
+  the union/enum's consumers at seed time is now a RED-brief checklist item, second recurrence across runs.
+  (d) A SHARED main checkout is contested ground: another fleet flipped its branch mid-recon (worktree audit
+  + reflog resolved ownership) and held the tree mid-edit at final-gate time — on any shared checkout, run
+  `git worktree list` + reflog at wave 0, re-verify before every full gate, and keep a scoped
+  targeted-vitest fallback to validate YOUR files while the tree is broken by others. (e) The structural-miss
+  seat again out-yielded every scoped pass: both prod-live HIGHs (bare-name vs SOQL-path key reads;
+  label-vs-boolean tile) were produced-set/read-set mismatches invisible per-file — and one was found by
+  RUNNING the producer (buildSeedPlan) and diffing its output keys against every reader.
+- **2026-07-26 plan005w0 (plan-005 wave 0, haiku prose trial + E5/O1):** (a) haiku-first
+  `.chain` on PROSE spec cards: 6/6 substantive at $0.11/card avg, 46-157s — trial continues
+  toward the 20-30-card gate before flipping the prose default; one real semantic miss (spec 20
+  FR-3 resume-unsafe) was partly seeded by an AMBIGUOUS orchestrator pin ("resume-if-same-label,
+  refuse-if-live-heartbeat" reads two ways) — collision/lifecycle rulings must pin the truth
+  table, not a slogan. (b) Verify waves on a SHARED worktree cage judge the COMBINED diff — 6/6
+  raw-refuted on "edits other files"; adjudicate, don't re-run (backlog 61; spec 14 FR-8
+  write-journal is the fix). (c) Retroactive verify of historical done cards is IMPOSSIBLE once
+  the target tree moves (36/36 stale-tree refutations incl. build artifacts like
+  tsconfig.tsbuildinfo) — judged coverage exists only at run close; run the verify wave BEFORE
+  releasing a bus (backlog 63). (d) E5 forensics: the glm "unreliability" 400 cluster was OUR
+  bare-token bug (Z.ai 1211, model="glm[1m]"), deterministic at healthy quota — re-judge a lane's
+  reliability AFTER subtracting self-inflicted config errors before demoting it; `<synthetic>`
+  rows are the CLI's own error envelope, not lane behavior. (e) Idle session agents: read the
+  transcript for the deliverable instead of a second nudge — artifacts-as-truth applies to agent
+  reports too (the full forensics report sat finished in the transcript through two idle pings).
+- **2026-07-26 gtm-fl (plan 036 Field Ledger app-wide redesign, 33 bus cards + 9 session seats, single $9-capped bus):** (a) the
+  single-bus BUDGET_USD geometry never engaged — the Moonshot ACCOUNT died first (429 suspended, balance $0 at $3.03 spent);
+  a real-money lane needs a BALANCE probe at preflight, not just a 1-token auth ping, before hard cards pin to it. (b) Both kimi
+  "timeouts" (R1/R2, 1200s) had FINISHED their edits and died narrating — salvage by artifact+contract verification beat re-serving
+  (saved a full L-card re-run ×2); L-size cards get WORKER_TIMEOUT_SEC=1800 from now on. (c) grok first-serve preamble held 12/12
+  on artifact-done BUT two sweeps were shallow (files touched, card construction left standing) — the artifact gate must grep
+  CONTENT (retired-symbol absence in owned files), not paths; "files moved" is not "work done". (d) Worktree resources are
+  single-occupancy: a session gate-runner ran `rm -rf .next` under a live dev server mid-screenshot-sweep and destroyed 82 shots —
+  co-scheduled seats need explicit resource leases (dev server, .next, the bus dirs), and a hold message sent AFTER spawn is not a
+  lease. (e) Design-system rollouts: pin the CLASS VOCABULARY into both the css card and the tsx card (they can't read each other's
+  in-flight output) — worked; but pin the CSS/JSX seam too (facts interpunct: css expected item-spans, tsx emitted separator-spans;
+  only codex caught it). (f) Screenshot judges need the SCOPE ruling in the prompt (pass-A vs pass-B) or half the findings
+  adjudicate out-of-scope — 12 of 26 design-judge findings were ratified-deferred plant work.

@@ -840,3 +840,18 @@ EOF
   [ "$status" -eq 0 ]
   [ -f "$BUS/loop/runpf2/criteria.md" ]
 }
+
+# --- spec 20 FR-5: --run pass-through ------------------------------------------------------------
+
+@test "spec20 FR-5: swarm-loop --run derives the namespaced busdir for init" {
+  export UNIMATRIX_BUS_ROOT="$BATS_TEST_TMPDIR"
+  LOOP_GOAL="ns goal" LOOP_ORACLE="true" run env -u BUSDIR -u SPEEDWARS_RUN "$LOOPSH" --run nsalpha init nsr1
+  [ "$status" -eq 0 ]
+  [ -f "$BATS_TEST_TMPDIR/.bus-nsalpha/loop/nsr1/criteria.md" ]
+}
+
+@test "spec20 FR-5: an invalid --run label is refused at parse time" {
+  run "$LOOPSH" --run "../evil" init x1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid --run label"* ]]
+}

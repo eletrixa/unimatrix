@@ -643,3 +643,13 @@ seat marker, not a card park — it is not written by `_park_card` and this FR d
 - **Manifest authorship.** FR-2 defines the sidecar and its consumers; whether the orchestrator
   writes it for every write card by default, or only where cards share a target, is a skill-level
   policy question deferred to the `unimatrix` skill's lane-assignment step.
+
+---
+
+## Amendment — 2026-07-26 (per-card write-journal for shared cages)
+
+The 2026-07-25 shared-cage findings ratify the following:
+- **Blind spot:** the per-card diff gate checks "did the cage change since spawn" — in a SHARED cage, sibling cards' writes satisfy the check for a card that wrote NOTHING. Confirmed false-dones through this exact hole: W3D1 (claude:haiku, full before/after edit report, zero bytes written — backlog 49/reviews 2026-07-25) and 5 grok narration false-dones in one evening (backlog 59, MAJOR).
+- **FR-8 (new):** the engine records a per-card write-journal — the set of paths THIS card's worker actually wrote (from the worker stream's Write/Edit tool records, which the engine already archives as `run-<id>.jsonl`) — and the diff gate for a shared cage MUST require this card's OWN journal to be non-empty and its paths to show real change, sibling writes no longer sufficing. Journal replay must respect subsequent rm/mv records in the same stream (the 2026-07-25 salvage-doctrine lesson: Write records alone resurrect deliberately-deleted files). *(Shipped 2026-07-26: `_write_journal` in `src/swarm-lib.sh` (post-hoc jq over the archived stream; claude-binary lanes only — grok/codex/gemini streams carry no tool_use records, so those keep the whole-cage sweep), journal arm + `_cage_is_shared` in `_write_target_changed`. Sharing counts live `queue/*.write` sidecars AND finished siblings' `write-*.txt` archives — a fast writer finalizing before the narrator would otherwise re-open the exact W3D1 window. rm/mv awareness at the gate: a journal path that no longer exists on disk contributes no change evidence.)*
+- **Out of scope:** no change to single-card cages (current gate remains sufficient); no filesystem watchers or daemons — the journal derives from the already-captured stream, post-hoc at finalize.
+- **Acceptance:** bats — two cards share a cage, card A writes a file, card B writes nothing but narrates: gate passes A, fails B with the W3D1 signature named in the failure reason.

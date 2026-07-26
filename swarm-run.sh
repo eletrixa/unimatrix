@@ -101,23 +101,49 @@ _abspath() {
     case "$1" in /*) printf '%s\n' "$1";; *) printf '%s\n' "$PWD/$1";; esac
   fi
 }
+# spec 20 FR-1 (backlog 11/21): `--run <label>` atomically derives BUSDIR=.bus-<label> +
+# SPEEDWARS_RUN=<label> from one token, so the two can never drift apart again. Parsed BEFORE the
+# BUSDIR default below so the derivation slots into the same precedence line: explicit env >
+# --run derivation > baked .bus default (spec 04 doctrine — an operator's BUSDIR env always wins).
+# The label is path-material — anything outside [A-Za-z0-9._-] is refused at parse time.
+# UNIMATRIX_BUS_ROOT is a TEST seam only (bats must not create .bus-* inside the real checkout);
+# operators never set it.
+RUN_LABEL=""
+while [[ "${1:-}" == --run ]]; do
+  if [[ $# -lt 2 ]]; then echo "swarm-run: --run needs a label" >&2; exit 1; fi
+  RUN_LABEL="$2"; shift 2
+done
+if [[ -n "$RUN_LABEL" && ! "$RUN_LABEL" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "swarm-run: invalid --run label '$RUN_LABEL' (allowed: A-Za-z0-9._-)" >&2
+  exit 1
+fi
 # spec 15 FR-1: remember whether BUSDIR came from the ENVIRONMENT before the default below erases
 # the distinction — `call` overrides only the default (its bus belongs at the caller's cwd, not
 # inside the unimatrix checkout), never an explicit operator/test override.
 _BUSDIR_FROM_ENV="${BUSDIR:+1}"
+if [[ -z "${BUSDIR:-}" && -n "$RUN_LABEL" ]]; then
+  BUSDIR="${UNIMATRIX_BUS_ROOT:-$SCRIPT_DIR}/.bus-$RUN_LABEL"
+fi
 BUSDIR="$(_abspath "${BUSDIR:-$SCRIPT_DIR/.bus}")"
+if [[ -n "$RUN_LABEL" && -z "${SPEEDWARS_RUN:-}" ]]; then
+  export SPEEDWARS_RUN="$RUN_LABEL"
+fi
 CONF="${CONF:-$SCRIPT_DIR/swarm.conf}"
 HEARTBEAT_SEC="${HEARTBEAT_SEC:-30}"
 
 usage() {
   cat >&2 <<'EOF'
-usage: swarm-run.sh --plan-only "<question>"
-       swarm-run.sh config [KEY value]
+usage: swarm-run.sh [--run <label>] --plan-only "<question>"
+       swarm-run.sh [--run <label>] config [KEY value]
        swarm-run.sh doctor [--live|--plugin]
-       swarm-run.sh verify
-       swarm-run.sh call <lane[:model]> '<prompt>'|@<promptfile> [--write <dir>]
+       swarm-run.sh [--run <label>] verify
+       swarm-run.sh [--run <label>] call <lane[:model]> '<prompt>'|@<promptfile> [--write <dir>]
               [--files <listfile> --batch <N>] [--chain '<lane[:model]> ...'] [--id <label>]
-       swarm-run.sh ["<question — ignored, this mode reads .bus/specs>"]
+       swarm-run.sh [--run <label>] ["<question — ignored, this mode reads .bus/specs>"]
+
+--run <label> (spec 20): derives BUSDIR=.bus-<label> and SPEEDWARS_RUN=<label> from one token so
+concurrent swarms stop colliding on one bus. Explicit BUSDIR/SPEEDWARS_RUN env vars override the
+derivation. A bus whose heartbeat is live (<60s) refuses a new run.
 EOF
   exit 1
 }
@@ -303,6 +329,35 @@ _park_card() {
 # lane:model, bypassing EXEC_CHAIN entirely — no fallback, so a pinned lane that's limit_active
 # just waits (not parked; the flag is temporary) rather than being marked exhausted.
 # Sets CLAIMED_ID/CLAIMED_LANE on success. rc 0 = claimed, 1 = nothing claimable now, 2 = PAUSEd.
+# _probe_lane_event <bare_lane> <trigger> — spec 13 FR-6 (backlog 58): event-fired live probe,
+# at most once per bare lane per run (limits/.probed-<lane> marker; trigger = pre-claim |
+# reactive). Reuses _doctor_probe_lane verbatim — same probe, same ledger row shape as
+# `doctor --live`, just event-fired. Criterion-4 guard: a lane already carrying any
+# .broken/.dead/.limited marker is never probed and its markers never rewritten — a probe only
+# ever ADDS a first .broken to a lane with no health state. Criterion 2: an existing marker
+# (whatever its outcome) suppresses every later event this run, including reactive after a
+# healthy pre-claim. rc 1 iff the probe ran NOW and FAILed (caller rescans so the card routes
+# around the fresh .broken); every other path is rc 0 — an already-probed lane must never wedge
+# the claim loop.
+_probe_lane_event() {
+  local bare="$1" trigger="$2" mark="$BUSDIR/limits/.probed-$1"
+  [[ "${PROBE_AUTO:-1}" == "1" ]] || return 0
+  [[ -e "$mark" ]] && return 0
+  lane_blocked "$BUSDIR" "$bare" && return 0
+  local out rc=0
+  out="$(_doctor_probe_lane "$bare")" || rc=$?
+  if (( rc == 0 )); then
+    printf 'PASS %s %s\n' "$trigger" "$out" > "$mark"
+    _doctor_ledger_row "$bare" "auto live-probe ($trigger, $out)"
+    return 0
+  fi
+  printf 'FAIL %s %s\n' "$trigger" "$out" > "$mark"
+  _doctor_ledger_row "$bare" "auto live-probe FAILED ($trigger) — $out"
+  broken_flag "$BUSDIR" "$bare"
+  echo "swarm-run: lane '$bare' failed its $trigger live probe — $out; marked lane-down" >&2
+  return 1
+}
+
 _try_claim_one() {
   CLAIMED_ID=""; CLAIMED_LANE=""
   [[ -e "$BUSDIR/PAUSE" ]] && return 2
@@ -473,6 +528,25 @@ _try_claim_one() {
       fi
     fi
 
+    # spec 10 FR-R15 (backlog 62): a bare sidecar token must never reach lane_cmd as a model id —
+    # ${lanemodel#*:} degenerates it to the lane name and the provider 400s (Z.ai 1211 / Moonshot
+    # 404). Normalize at THIS dispatch choke point, loudly: it also keeps the claim filename
+    # parseable by _claim_meta, whose regex requires the colon.
+    if [[ "$lane" != *:* ]]; then
+      local fr15_resolved; fr15_resolved="$(_call_lane_token "$lane")"
+      echo "claim: $id: bare lane token '$lane' resolved to '$fr15_resolved' (write full lane:model in the sidecar)" >&2
+      lane="$fr15_resolved"
+    fi
+
+    # spec 13 FR-6 pre-claim arm (backlog 58): the lane's FIRST card this run fires one live probe
+    # before any worker spawns. On FAIL the lane is .broken as of NOW — rescan, so this card routes
+    # around it through the ordinary lane_blocked walk above instead of burning MAX_LANE_RETRIES
+    # (brain058: 8 cards seeded cheap-first, 0 executed there — every rung burned 3 strikes on a
+    # dead lane before failing over).
+    if ! _probe_lane_event "${lane%%:*}" pre-claim; then
+      continue
+    fi
+
     local crc=0
     claim "$BUSDIR" "$id" "$lane" || crc=$?
     if (( crc == 0 )); then
@@ -569,6 +643,11 @@ _spawn_worker() {
       || rm -f "$BUSDIR/limits/$id.base"
   fi
 
+  # spec 04 amendment 2026-07-26 (backlog 20): same-lane auth-herd stagger — placed after the
+  # watchdog/heartbeat are armed (a waiting worker stays observable) and immediately before the
+  # CLI launch, so "first worker starts alone" refers to the actual provider-facing process.
+  _stagger_first_spawn "$BUSDIR" "$bare" "$id"
+
   _rotate_run_log "$BUSDIR" "$id"
   set +e
   "${LANE_ARGV[@]}" 2>>"$BUSDIR/run-$id.jsonl.stderr" | tee "$BUSDIR/run-$id.jsonl" >/dev/null
@@ -614,13 +693,18 @@ _grok_token_sync() {
 # `find -newer <missing>` (empty output) did.
 # spec 14 FR-2: with a queue/<id>.files manifest the sweep is scoped to THAT card's deliverables
 # instead of the whole cage, so a concurrently-running sibling card's edit can no longer satisfy
-# this card's gate. Absent manifest = the whole-target sweep, byte-identical — and that stays the
-# default, so the cage-granular ceiling below still describes every card without one.
-# ponytail: KNOWN CEILING (unmanifested cards only) — cage-granular, not card-granular. Two write
-# cards sharing one .write target satisfy each other's gate (a no-op card can be salvaged on a
-# sibling's bytes). Upgrade path: give those cards a manifest.
+# this card's gate. Absent manifest = the whole-target sweep — EXCEPT (spec 14 FR-8, backlog 59)
+# when the cage is SHARED by another live write card and this card rides a claude-binary lane:
+# then the sweep is scoped to this card's OWN write-journal (_write_journal, from the archived
+# stream), so a narration-only card can no longer be blessed on a sibling's bytes (the W3D1
+# shape). Journal paths that no longer exist contribute nothing — a Write record must not credit
+# a file the same stream later rm'd (the 2026-07-25 salvage-doctrine lesson, applied to the gate).
+# ponytail: REMAINING CEILING — grok/codex/gemini streams carry no tool_use records, so shared
+# cages there stay cage-granular; sharing is detected via live queue/*.write sidecars, so a
+# sibling that already finalized is invisible (the whole-cage sweep then still applies, which is
+# also what the pre-FR-8 behavior was). Upgrade path for both: a manifest.
 _write_target_changed() {
-  local id="$1" wtarget stamp_epoch
+  local id="$1" jlane="${2:-}" wtarget stamp_epoch
   wtarget="$(<"$BUSDIR/queue/$id.write")"
   stamp_epoch="$(_stat_mtime "$BUSDIR/limits/$id.stamp" 2>/dev/null || true)"
   [[ -n "$stamp_epoch" ]] || return 1
@@ -634,6 +718,23 @@ _write_target_changed() {
   if [[ -f "$BUSDIR/queue/$id.files" ]]; then
     _manifest_roots "$id" "$wtarget" || return 1
     roots=("${MANIFEST_ROOTS[@]}")
+  elif [[ "$jlane" == claude || "$jlane" == glm || "$jlane" == kimi ]] \
+       && _cage_is_shared "$id" "$wtarget"; then
+    local -a jroots=()
+    local jp tcanon
+    tcanon="$(realpath -m -- "$wtarget" 2>/dev/null || printf '%s' "$wtarget")"
+    while IFS= read -r jp; do
+      [[ -n "$jp" ]] || continue
+      jp="$(realpath -m -- "$jp" 2>/dev/null || printf '%s' "$jp")"
+      # in-cage, still-existing files only: an out-of-cage write proves nothing about THIS cage,
+      # and a recorded-then-removed path must not resurrect as change evidence (rm/mv awareness)
+      [[ "$jp" == "$tcanon"/* && -f "$jp" ]] && jroots+=("$jp")
+    done < <(_write_journal "$BUSDIR" "$id")
+    if (( ${#jroots[@]} == 0 )); then
+      echo "swarm-run: $id shares its write cage and its own stream journals no surviving in-cage write (W3D1 narration-only signature) — sibling bytes cannot satisfy this card's gate" >&2
+      return 1
+    fi
+    roots=("${jroots[@]}")
   fi
   # A listed path the worker never created simply doesn't exist; find's complaint goes to the
   # already-suppressed stderr and it contributes no match — exactly right, an undelivered
@@ -641,6 +742,28 @@ _write_target_changed() {
   [[ -n "$(find "${roots[@]}" -type f -newermt "@$((stamp_epoch - 1))" \
             -not -path '*/.git/*' -not -path "$BUSDIR/*" -not -path '*/.bus*/*' \
             -print -quit 2>/dev/null)" ]]
+}
+
+# _cage_is_shared <id> <wtarget> — spec 14 FR-8: rc 0 iff ANOTHER write card of this run — live
+# (queue/*.write sidecar) or already finished (write-*.txt archive, dropped by _archive_and_release
+# at success) — targets the same canonical cage. Finished siblings MUST count: the archetypal W3D1
+# race is a fast writer finalizing before the narrator does, and scanning only live sidecars would
+# re-open exactly that window (found by this feature's own bats fixture). Cost of the archive scan:
+# a reused bus where some PAST card wrote this cage keeps the journal requirement active for later
+# unmanifested cards there — which only ever fails narration-only cards, the class the gate exists
+# to catch.
+_cage_is_shared() {
+  local id="$1" wtarget="$2" f other tcanon ocanon
+  tcanon="$(realpath -m -- "$wtarget" 2>/dev/null || printf '%s' "$wtarget")"
+  for f in "$BUSDIR"/queue/*.write "$BUSDIR"/write-*.txt; do
+    [[ -e "$f" ]] || continue
+    other="$(basename "$f")"
+    other="${other%.write}"; other="${other#write-}"; other="${other%.txt}"
+    [[ "$other" == "$id" ]] && continue
+    ocanon="$(realpath -m -- "$(<"$f")" 2>/dev/null || true)"
+    [[ -n "$ocanon" && "$ocanon" == "$tcanon" ]] && return 0
+  done
+  return 1
 }
 
 # _manifest_roots <id> <wtarget> — spec 14 FR-2's consume-time half of the trust boundary. Resolves
@@ -742,7 +865,7 @@ _salvage_timeout() {
   # attempt on the same id would inherit the KILLED lane's rejected text as its own answer (and
   # full_run's `=== results ===` would list the branch as if it had produced one).
   if [[ -e "$BUSDIR/queue/$id.write" ]]; then
-    _write_target_changed "$id" || { rm -f "$BUSDIR/res-$id.txt"; return 1; }
+    _write_target_changed "$id" "$bare" || { rm -f "$BUSDIR/res-$id.txt"; return 1; }
   else
     (( answer_ok )) || { rm -f "$BUSDIR/res-$id.txt"; return 1; }
   fi
@@ -951,7 +1074,7 @@ _finalize_worker() {
     # pinned write target is a false completion (a CLI can exit 0 having only talked, never
     # edited) — `find -newer` against the pre-spawn stamp (_spawn_worker) is the same signal a
     # `git status`-style check uses to detect "nothing changed here".
-    if [[ -e "$BUSDIR/queue/$id.write" ]] && ! _write_target_changed "$id"; then
+    if [[ -e "$BUSDIR/queue/$id.write" ]] && ! _write_target_changed "$id" "$bare"; then
       reject_reason="write target '$(<"$BUSDIR/queue/$id.write")' shows no change since spawn"
       fail_class="false-done"
     fi
@@ -1072,6 +1195,16 @@ _finalize_worker() {
   else
     class="${fail_class:-no-answer}"
   fi
+  # spec 13 FR-6 reactive arm: a lane's first instant-error fires one live probe — api-error IS
+  # the spec's "0-token synthetic result with is_error:true" shape; auth-death/server-error are
+  # the same class family caught by answer_unusable. In practice the pre-claim arm has usually
+  # already probed (its marker suppresses this one, criterion 2) — this arm exists for lanes that
+  # reached a worker WITHOUT a pre-claim probe: a resumed bus with pre-feature claims, or a lane
+  # whose probe was skipped while it carried a since-expired health marker. `|| true`: a FAIL here
+  # already wrote .broken; the card's own fate was decided by the classification above.
+  case "$class" in
+    api-error | auth-death | server-error) _probe_lane_event "$bare" reactive || true ;;
+  esac
   [[ "${SPEEDWARS_AUTO:-1}" == "1" ]] && speed_row "$BUSDIR" "$id" "$lane" "${reason// /-}" "$wrc" "$pinned" "$class" 2>/dev/null || true
   if (( lrc == 1 )); then
     # spec10 FR-R9 (r3codex MAJ): a MID-FLIGHT limit/dead signal is fallback provenance too —
@@ -1338,8 +1471,28 @@ _close_out_evidence() {
   } >&2
 }
 
+# _collision_gate — spec 20 FR-3 (as amended at activation, 2026-07-26): refuse to start NEW work
+# on a bus whose spec 11 orchestrator heartbeat is LIVE — two pools on one busdir is never safe,
+# same label included (that case is an accidental double-invocation). Stale or absent heartbeat
+# proceeds: same-label re-invocation of a finished/dead run resumes the bus. Applied at the
+# new-work entries (full_run, cmd_call) only — `verify` is exempt (an owner-invoked post-pass on
+# an existing run's bus; gating it would refuse the very orchestrator that keeps the heartbeat
+# fresh). The heartbeat file carries no owner identity (bare touch), so a legitimate parent
+# driving a child run on its own bus — swarm-loop iterations — asserts ownership with
+# UNIMATRIX_BUS_OWNER=1 in the child env (env-only, never a conf key; same doctrine as
+# TIMEOUT_SALVAGE).
+_collision_gate() {
+  [[ "${UNIMATRIX_BUS_OWNER:-0}" == "1" ]] && return 0
+  if _heartbeat_live "$BUSDIR/heartbeat"; then
+    echo "swarm-run: bus $BUSDIR has a LIVE run (heartbeat age <60s) — refusing; pick a different --run label, or set UNIMATRIX_BUS_OWNER=1 if this invocation owns that run" >&2
+    exit 1
+  fi
+  return 0
+}
+
 full_run() {
   conf_load "$CONF"
+  _collision_gate
   bus_init "$BUSDIR"
   # Pin THIS run's ledger key into the bus while we still have a write context, so every later
   # reader — including `swarm-ctl review-stub` from a fresh shell with no env — joins on the same
@@ -2059,7 +2212,9 @@ cmd_call() {
   fi
 
   # FR-1 busdir + FR-11 bus-local ledger + the run key every evidence row joins on.
-  if [[ -z "$_BUSDIR_FROM_ENV" ]]; then
+  # spec 20 FR-6: a --run derivation counts as pinned exactly like an env override — `call`'s
+  # cwd-local default must not clobber it (the derived .bus-<label> IS the requested bus).
+  if [[ -z "$_BUSDIR_FROM_ENV" && -z "$RUN_LABEL" ]]; then
     BUSDIR="$(_abspath "$PWD/.bus-call-$label")"
   fi
   : "${SPEEDWARS_RUN:=call-$label}"
@@ -2069,6 +2224,9 @@ cmd_call() {
   # argv to carry it, so inheritance is all it has. Unexported, /health vouched for the engine's
   # default .bus while the run used .bus-call-<label>.
   export BUSDIR SPEEDWARS_RUN LEDGER_FILE
+  # spec 20 FR-3: after the busdir is FINAL (env / --run / cwd default) — gating earlier would
+  # check a bus this call isn't even going to use.
+  _collision_gate
 
   # FR-1: overlaying a live or finished run's bus is never what the operator meant.
   if [[ -d "$BUSDIR" ]]; then

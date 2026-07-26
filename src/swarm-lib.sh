@@ -134,6 +134,7 @@ CONF_KEYS=(PLAN ORCHESTRATOR REVIEW EXEC_CHAIN MAX_ITERATIONS BUDGET_USD FANOUT 
            MON_PORT MON_AUTOOPEN CLASS_REVIEW CLASS_EXEC REVIEW_CHAIN PIN_WAIT_SEC
            PLAN_CHAIN ORCH_CHAIN ORCH_TAKEOVER_MIN FEEDBACK_AUTO PAYG_FALLBACK
            GLM_MAX_THINKING_TOKENS KIMI_MAX_THINKING_TOKENS GROK_EFFORT CAGE_DENY_MAX
+           STAGGER_FIRST_SPAWN_SEC PROBE_AUTO
            TIMEOUT_CLAUDE TIMEOUT_CODEX TIMEOUT_GEMINI TIMEOUT_GLM TIMEOUT_GROK TIMEOUT_KIMI)
 
 conf_load() {
@@ -194,6 +195,12 @@ conf_load() {
   # spec 14 FR-1: ceiling, not a toggle — a run that knowingly cages out a few reads raises it;
   # absurdly high is the opt-out. 0 = any read-class denial parks the card.
   : "${CAGE_DENY_MAX:=0}"
+  # spec 04 amendment 2026-07-26 (backlog 20): bound (seconds) a same-lane follower waits for the
+  # lane's FIRST worker to produce output before spawning its own CLI. 0 = stagger off.
+  : "${STAGGER_FIRST_SPAWN_SEC:=10}"
+  # spec 13 FR-6 (backlog 58): event-fired auto live-probes (pre-claim + reactive), once per lane
+  # per run. 0 = off (tests, or an operator who wants doctor --live only).
+  : "${PROBE_AUTO:=1}"
   # spec 04 §Amendment 2026-07-25 FR-C: per-lane watchdog overrides, resolved at the single
   # enforcement site as ${TIMEOUT_<LANE>:-$WORKER_TIMEOUT_SEC}. Defaults are EMPTY on purpose —
   # baking docs/larger-swarms.md's C3 suggestions would silently multiply the effective timeout
@@ -351,6 +358,18 @@ claim() {
   [[ -e "$src" ]] || return 1
   # Anything else (perms, bad busdir, disk full, ...) is a real error — let it surface.
   mv "$src" "$busdir/claimed/$id.$worker"
+}
+
+# _heartbeat_live <heartbeat-file> — spec 20 FR-3/FR-4: rc 0 iff the spec 11 orchestrator
+# heartbeat at a bus root is LIVE (mtime age < 60s). Read-only — spec 20 adds no writer; the file
+# is maintained by swarm-ctl heartbeat / the orchestrator loop (spec 11 owns it). Missing file =
+# not live.
+_heartbeat_live() {
+  local f="$1" mt now
+  [[ -f "$f" ]] || return 1
+  mt="$(_stat_mtime "$f" 2>/dev/null)" || return 1
+  now="$(date +%s)"
+  (( now - mt < 60 ))
 }
 
 # heartbeat <busdir> <id> <worker> — touch the claim file's mtime.
@@ -756,8 +775,9 @@ kill_subtree() {
 # whole real $HOME (~/.claude has project history, agents, helpers, ... none of which a worker
 # needs or should be able to read).
 # [NEEDS CLARIFICATION]: never live-smoke-tested against a real headless run — if either CLI's own
-# startup needs anything else under $HOME (onboarding checks, codex config.toml, ...) it will
-# surface as a lane_cmd/worker failure here rather than us silently widening to the real $HOME.
+# startup needs anything else under $HOME (onboarding checks, ...) it will surface as a
+# lane_cmd/worker failure here rather than us silently widening to the real $HOME. (codex
+# config.toml graduated from this list to a deliberate mirror — spec 04 amendment 2026-07-26.)
 # Multi-account gotcha (found live, docs/02-build-pitfalls.md #19): the orchestrator session may
 # run under CLAUDE_CONFIG_DIR (multi-account claude setups) — that account's credentials are the
 # LIVE ones, not necessarily $HOME/.claude's (which can be a different/stale account). claude
@@ -788,6 +808,10 @@ _scratch_home() {
     codex)
       mkdir -p "$home/.codex"
       [[ -f "$HOME/.codex/auth.json" ]] && cp -f "$HOME/.codex/auth.json" "$home/.codex/auth.json"
+      # config.toml carries reasoning effort + output tuning; without it the caged CLI falls back
+      # to reasoning_effort:none — a silent quality downgrade (spec 04 amendment 2026-07-26,
+      # backlog 49). CODEX arm only: grok's config exclusion is a locked containment decision.
+      [[ -f "$HOME/.codex/config.toml" ]] && cp -f "$HOME/.codex/config.toml" "$home/.codex/config.toml"
       ;;
     grok)
       # xAI Grok Build CLI: OAuth file auth (~/.grok/auth.json, mode 600), not an env-var key —
@@ -805,6 +829,32 @@ _scratch_home() {
     gemini | glm | kimi) : ;;  # pure env-var auth — nothing to copy
   esac
   printf '%s' "$home"
+}
+
+# _stagger_first_spawn <busdir> <bare_lane> <id> — spec 04 amendment 2026-07-26 (backlog 20):
+# same-lane first-spawn auth herd. N simultaneous FIRST spawns on one lane all hit the provider's
+# auth/rate gate at t=0 (live incident: 4 parallel grok first-spawns, "Not signed in" ×4). The
+# first caller per bare lane per run claims the marker atomically (mkdir) and proceeds at once;
+# every later same-lane caller waits — bounded by STAGGER_FIRST_SPAWN_SEC — until that first
+# worker's run log shows output bytes (auth demonstrably works) or the bound expires. Always
+# returns 0: the stagger's job is de-simultaneity, never health — a wedged first spawn must not
+# park the lane (spec 13's markers own that). Cross-lane parallelism untouched (per-lane marker);
+# only the run's FIRST spawn per lane ever waits — once run-<first>.jsonl has bytes, every later
+# caller falls through on its first poll.
+_stagger_first_spawn() {
+  local busdir="$1" bare="$2" id="$3" mark="$1/limits/.first-$2"
+  (( ${STAGGER_FIRST_SPAWN_SEC:-10} > 0 )) || return 0
+  if mkdir "$mark" 2>/dev/null; then
+    printf '%s' "$id" > "$mark/id"
+    return 0
+  fi
+  local firstid i ticks=$(( ${STAGGER_FIRST_SPAWN_SEC:-10} * 4 ))
+  for (( i = 0; i < ticks; i++ )); do
+    firstid="$(cat "$mark/id" 2>/dev/null || true)"
+    [[ -n "$firstid" && -s "$busdir/run-$firstid.jsonl" ]] && return 0
+    sleep 0.25
+  done
+  return 0
 }
 
 # _env_master_key <NAME> — grep one key out of the env-master file into stdout (least-privilege;
@@ -1794,6 +1844,24 @@ _verify_default_model() {
   esac
 }
 
+# _write_journal <busdir> <id> — spec 14 FR-8 (backlog 59): the set of paths THIS card's worker
+# actually wrote, derived post-hoc from the already-archived worker stream (run-<id>.jsonl) — no
+# watcher, no daemon. Claude-binary lanes only (claude/glm/kimi): their stream carries assistant
+# tool_use records with input.file_path for the write-class tools; grok/codex/gemini streams have
+# no such records, so their journal is underivable and callers must not require one there.
+# One path per line, first-seen order, deduped. Empty output = the stream shows no write-class
+# call at all (the W3D1 narration-only shape). rc 0 always — evidence extraction, not a gate.
+_write_journal() {
+  local busdir="$1" id="$2"
+  local log="$busdir/run-$id.jsonl"  # separate `local` — same set -u pitfall kill_subtree documents
+  [[ -s "$log" ]] || return 0
+  jq -r '
+    .message.content[]? | select(.type == "tool_use")
+    | select(.name == "Write" or .name == "Edit" or .name == "MultiEdit" or .name == "NotebookEdit")
+    | (.input.file_path // .input.notebook_path) // empty
+  ' "$log" 2>/dev/null | awk '!seen[$0]++' || true
+}
+
 # _write_card_diff_section <busdir> <id> <target> — backlog-28 (specs/10-role-classes.md Round-3
 # amendments #2): builds the CARD DIFF section of a write card's verify prompt, scoped to files
 # under <target> newer than limits/<id>.stamp (the diff-gate baseline, kept alive on success
@@ -2446,24 +2514,55 @@ speed_row() {
     # for TOKEN extraction — but its cost_usd is RECOMPUTED at Moonshot list price (same formula as
     # _ledger_kimi_cost), never taken from $e.total_cost_usd, which is claude-CLI Anthropic-list
     # pricing against the swapped base URL — wrong provider.
+    #
+    # USD-as-proxy pricing (operator directive 2026-07-26; spec 08 FR-2 amendment): every lane that
+    # CAN be priced carries a cost_usd at its OWN provider's list price plus a cost_basis tag —
+    # subscription/quota lanes included, because the flat fee is still paid and dollars are the
+    # cross-lane proxy for pool draw. $/M list prices pinned 2026-07-26 (re-verify on any
+    # docs/versions.md model re-pin):
+    #   glm-5.2   Z.ai API:  in 1.40 / cache-read 0.26 / out 4.40   (docs.z.ai pricing)
+    #   grok-4.5  <200k tier: in 2.00 / cache-read 0.30 / out 6.00  (docs.x.ai/docs/models)
+    #   gpt-5-codex:          in 1.25 / cache-read 0.125 / out 10.0 (developers.openai.com; the
+    #     ChatGPT-auth default gpt-5.2-codex has no published per-token price — this is the
+    #     closest published proxy, and the row is tagged notional either way)
+    #   kimi-k3:              in 3.00 / cache-hit 0.30 / out 15.0   (platform.kimi.ai — unchanged)
+    # claude keeps the envelope figure (accurate Anthropic list per docs/lane-economics.md);
+    # glm's envelope figure is claude-priced garbage and is ALWAYS recomputed (never null-checked —
+    # presence of a wrong number must not preserve it); gemini stays unpriced until the key's tier
+    # (free vs paid) is recorded — a fabricated nonzero would mislead. cost_basis vocabulary:
+    # envelope-list | envelope-pool | recomputed-list | unpriced-tier-unknown.
     usage=$(jq -cs --arg lane "$bare" '
       (if $lane == "grok" then [.[] | select(.type == "end")][-1]
        elif $lane == "codex" then [.[] | select(.type == "turn.completed")][-1]
        else [.[] | select(.type == "result")][-1] end) as $e |
       if $e == null then {} else
         if $lane == "codex" then
+          # OpenAI usage.input_tokens INCLUDES cached_input_tokens — split fresh vs cached before
+          # pricing or the recompute overstates 3-6x at observed 0.66-0.91 cache ratios.
+          ((($e.usage.input_tokens // 0) - ($e.usage.cached_input_tokens // 0)) | if . < 0 then 0 else . end) as $fresh |
           { tokens_in: $e.usage.input_tokens, tokens_out: $e.usage.output_tokens,
             tokens_cached: $e.usage.cached_input_tokens,
             tokens_reasoning: $e.usage.reasoning_output_tokens,
+            cost_usd: (($fresh * 1.25
+                        + ($e.usage.cached_input_tokens // 0) * 0.125
+                        + ($e.usage.output_tokens // 0) * 10.0) / 1e6),
+            cost_basis: "recomputed-list",
             turns: ([.[] | select(.type == "turn.completed")] | length) }
         elif $lane == "grok" then
           { tokens_in: $e.usage.input_tokens, tokens_out: $e.usage.output_tokens,
             tokens_cached: $e.usage.cache_read_input_tokens,
             tokens_reasoning: $e.usage.reasoning_tokens,
-            cost_usd: $e.total_cost_usd, turns: $e.num_turns, stop: $e.stopReason }
+            cost_usd: ($e.total_cost_usd //
+              (((($e.usage.input_tokens // 0) - ($e.usage.cache_read_input_tokens // 0)
+                 | if . < 0 then 0 else . end) * 2.0
+                + ($e.usage.cache_read_input_tokens // 0) * 0.30
+                + ($e.usage.output_tokens // 0) * 6.0) / 1e6)),
+            cost_basis: (if $e.total_cost_usd != null then "envelope-pool" else "recomputed-list" end),
+            turns: $e.num_turns, stop: $e.stopReason }
         elif $lane == "gemini" then
           { tokens_in: $e.stats.input_tokens, tokens_out: $e.stats.output_tokens,
-            tokens_cached: $e.stats.cached, duration_api_ms: $e.stats.duration_ms }
+            tokens_cached: $e.stats.cached, duration_api_ms: $e.stats.duration_ms,
+            cost_basis: "unpriced-tier-unknown" }
         else
           { tokens_in: $e.usage.input_tokens, tokens_out: $e.usage.output_tokens,
             tokens_cached: $e.usage.cache_read_input_tokens,
@@ -2471,7 +2570,13 @@ speed_row() {
                 ((($e.usage.input_tokens // 0) + ($e.usage.cache_creation_input_tokens // 0)) * 3.0
                  + ($e.usage.cache_read_input_tokens // 0) * 0.30
                  + ($e.usage.output_tokens // 0) * 15.0) / 1e6
+              elif $lane == "glm" then
+                ((($e.usage.input_tokens // 0) + ($e.usage.cache_creation_input_tokens // 0)) * 1.40
+                 + ($e.usage.cache_read_input_tokens // 0) * 0.26
+                 + ($e.usage.output_tokens // 0) * 4.40) / 1e6
               else $e.total_cost_usd end),
+            cost_basis: (if $lane == "kimi" or $lane == "glm" then "recomputed-list"
+                         else "envelope-list" end),
             turns: $e.num_turns,
             duration_ms: $e.duration_ms, duration_api_ms: $e.duration_api_ms,
             ttft_ms: $e.ttft_ms, is_error: $e.is_error,

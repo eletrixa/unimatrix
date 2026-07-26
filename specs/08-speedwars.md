@@ -43,7 +43,7 @@ per-lane extractable fields verified against the 2026-07-19 cockpit-build bus ar
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR-1 | `speed_row()` in src/swarm-lib.sh appends one JSONL row per finalized branch from every `_finalize_worker` outcome: `done`, `timeout`, `lane-unusable`, `retry`, `rate-limited,-failover`. Guarded `2>/dev/null \|\| true` — never fails a run. | Must |
-| FR-2 | Row fields: ts, run (`$SPEEDWARS_RUN` else busdir-parent basename), id, requested lane:model, served_lane, served_model, outcome, wrc, pinned, wall_secs (runlog birth→now; retried-id caveat documented) + per-lane usage: tokens in/out/cached/reasoning, cost_usd (claude/glm real-notional, grok notional; codex/gemini absent from envelope), turns, and claude/glm-only duration_ms/duration_api_ms/ttft_ms/is_error/api_error_status; grok stopReason. | Must |
+| FR-2 | Row fields: ts, run (`$SPEEDWARS_RUN` else busdir-parent basename), id, requested lane:model, served_lane, served_model, outcome, wrc, pinned, wall_secs (runlog birth→now; retried-id caveat documented) + per-lane usage: tokens in/out/cached/reasoning, cost_usd + cost_basis (see 2026-07-26 amendment — every priceable lane, at its own provider's list price), turns, and claude/glm-only duration_ms/duration_api_ms/ttft_ms/is_error/api_error_status; grok stopReason. | Must |
 | FR-3 | Env contract: `SPEEDWARS_FILE` (default `<busdir-parent>/docs/ops/speedwars.jsonl` — default path appends only when `docs/ops/` already exists, never scaffolds it into a temp busdir-parent; explicit `SPEEDWARS_FILE` creates its dir), `SPEEDWARS_AUTO=0` disables, `SPEEDWARS_RUN` labels the run. One row = one `write(2)` append. | Must |
 | FR-4 | Run-meta rows (`type:"run-meta"`): per-run complexity per card — C1–C5 rubric below, est_human_min bucket, verify_cost enum — written by the orchestrator at seed time. | Must |
 | FR-5 | Verdict rows (`type:"verdict"`): after the file-level gate, the orchestrator appends `{run,id,verified:bool,reason}` for any row whose claimed outcome the gate contradicts (false-done) or confirms when it matters. Append-only corrections — never edit prior rows. | Must |
@@ -150,3 +150,70 @@ first on a reused bus.
 **Consumers.** `speed_row`, `run_summary`, `feedback_stubs`, `swarm-ctl review-stub` and
 `swarm-run.sh`'s `call` aggregate ledger row all resolve through `_run_label`. An unresolvable label
 prints `n/a` in the aggregate row and skips the cost sum — never a real-looking `$0`.
+
+## Amendment — 2026-07-26 (USD-as-proxy: correct-provider pricing + cost_basis)
+
+Operator directive (maintainer, 2026-07-26): count USD on every lane, subscription/quota lanes
+included — the flat fee is still paid, and dollars at the provider's own list price are the
+cross-lane proxy for pool draw. This satisfies the "ask first" boundary on row-field changes.
+Where this contradicts FR-2's original cost wording, the amendment wins.
+
+**cost_usd** is now populated for every priceable lane, always at the SERVING provider's list
+price (pinned in the `speed_row` comment block in `src/swarm-lib.sh`; re-verify on any
+`docs/versions.md` model re-pin):
+
+| Lane | Source | cost_basis |
+|------|--------|------------|
+| claude | envelope `total_cost_usd` (accurate Anthropic list — lane-economics.md) | `envelope-list` |
+| kimi | recomputed at Moonshot list (unchanged) | `recomputed-list` |
+| glm | ALWAYS recomputed at Z.ai API list — the envelope figure is claude-priced against a swapped base URL and must never survive a null-check | `recomputed-list` |
+| codex | recomputed at gpt-5-codex list; fresh input = `input_tokens - cached_input_tokens` (OpenAI input INCLUDES cached) | `recomputed-list` |
+| grok | envelope figure when present (xAI's own pool estimate), else recomputed at xAI list | `envelope-pool` / `recomputed-list` |
+| gemini | NOT priced until the key's tier (free vs paid) is recorded — a fabricated nonzero would mislead | `unpriced-tier-unknown` |
+
+**Backfill.** Historical glm rows carried the wrong-provider figure; the operator's local ledger
+was rewritten once (2026-07-26): original preserved as `cost_usd_orig`, corrected `cost_usd` at
+Z.ai list from stored tokens (undercounts slightly — `cache_creation` was never extracted),
+`cost_basis: "recomputed-list-backfill"`. Historical run-summary rows keep their original sums
+(append-only snapshots); the canonical fold prices from attempt rows.
+
+**Contract note.** `cost_basis`/`cost_usd_orig` are additive JSONL keys — they ride the fleetops
+contract's payload escape valve (docs/fleetops-contract.md), no version bump; promotion to named
+columns only per the contract's own policy after the consumer has used them.
+
+## Amendment — 2026-07-26b (uniform tokens_reasoning extraction)
+
+**Ruling.** `speed_row` currently extracts `tokens_reasoning` only for codex (envelope
+`usage.reasoning_output_tokens`) and grok (envelope `usage.reasoning_tokens`). The claude/glm/kimi
+branch never emits it, making reasoning spend on those lanes unmeasurable (blocked cost-basis
+decision 2026-07-26 for lack of evidence). NEW requirement: claude/glm/kimi MUST extract the
+reasoning token count from the CLI result envelope — BUT the exact envelope key MUST be confirmed
+from a real captured archive (a .bus/.../run-*.jsonl with thinking enabled) BEFORE writing the jq
+extraction. A guessed key silently emits null forever and fails silent validation.
+
+Where this contradicts FR-2's tokens_reasoning wording, this amendment wins. Envelope keys live in
+`speed_row` comment block in `src/swarm-lib.sh`; each lane and its verified key go there.
+
+**Verification outcome (2026-07-26, closes this amendment).** The mandated key confirmation ran
+against every archived `run-*.jsonl` on the box (all `.bus-*` trees, thinking-enabled runs
+included). Result: the claude-CLI result envelope — shared by claude, glm, and kimi — carries **no
+reasoning-token key anywhere**: not in `usage` (keys observed: `input_tokens`,
+`cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`, `cache_creation.*`,
+`server_tool_use.*`, `service_tier`, `inference_geo`, `iterations`, `speed`), not at the result
+top level, not in `modelUsage` (per-model: `inputTokens`/`outputTokens`/`cacheCreationInputTokens`/
+`cacheReadInputTokens`/`costUSD`/…). Thinking output is folded into `output_tokens`; `"thinking"`
+matches in archives are content blocks, not usage counters.
+
+**Ruling amended:** the claude/glm/kimi extraction is UNBUILDABLE against the current CLI envelope
+— the "MUST extract" above is vacated; grok (`usage.reasoning_tokens`) and codex
+(`usage.reasoning_output_tokens`) remain the only lanes with the field, and both are already
+extracted. Reasoning spend on claude-family lanes stays unmeasurable-by-design (it is priced
+inside `tokens_out`, so cost accounting is unaffected). Revisit ONLY if a future claude CLI
+version adds a reasoning counter to the envelope — re-run the same archive sweep first.
+
+**Acceptance criteria (rewritten to match the verified outcome):**
+- [x] Key confirmation against real archives performed BEFORE any jq was written (the precondition
+      fired exactly as designed: it prevented a silent-null extraction)
+- [x] grok + codex rows carry `tokens_reasoning` (already shipped, `speed_row`)
+- [x] claude/glm/kimi rows omit the field entirely (absence-means-absent — correct, since the
+      envelope has no counter)

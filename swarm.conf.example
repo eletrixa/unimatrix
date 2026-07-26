@@ -25,6 +25,8 @@ LEASE_MIN=15                          # stale-lease reclaim threshold, in minute
 WORKER_TIMEOUT_SEC=300                # FR-12 wall-clock watchdog: kill a hung worker after this long
 MAX_LANE_RETRIES=3                    # consecutive unusable-answer retries per lane before failing over (parks when pinned/chain exhausted); bounds FR-6's retry-same-lane
 CAGE_DENY_MAX=0                       # spec 14 FR-1: read-class permission denials (Read/Glob/Grep/NotebookRead) a card may take before it PARKS as cage-denied instead of walking its chain into the same cage. A ceiling, not a toggle — raise it for a run that knowingly cages out a few reads; absurdly high is the opt-out. Bash denials are never counted (a write cage denies Bash by design)
+STAGGER_FIRST_SPAWN_SEC=10            # spec 04 amendment 2026-07-26 (backlog 20): same-lane auth-herd stagger — bound (seconds) a same-lane follower waits for the lane's FIRST worker to produce output before launching its own CLI. 0 = off. Cross-lane parallelism is never affected
+PROBE_AUTO=1                          # spec 13 FR-6 (backlog 58): event-fired auto live-probes — the lane's first card per run probes pre-claim (dead lane -> .broken before any spawn, card routes around instead of burning MAX_LANE_RETRIES); a first instant-error probes reactively. At most one probe per lane per run; existing .broken/.dead/.limited markers are never rewritten. 0 = off (doctor --live stays manual)
 
 # Per-lane watchdog overrides (spec 04 §Amendment 2026-07-25 FR-C). Empty/unset = fall back to
 # WORKER_TIMEOUT_SEC above; set one only for a lane that genuinely needs a different ceiling.

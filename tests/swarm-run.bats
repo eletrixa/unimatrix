@@ -46,6 +46,11 @@ setup() {
   printf 'Z_AI_CODING_KEY=default-glm-key\nMOONSHOT_API_KEY=default-kimi-key\nGEMINI_API_KEY=default-gem-key\n' \
     > "$BATS_TEST_TMPDIR/envmaster-default"
   export ENV_MASTER_FILE="$BATS_TEST_TMPDIR/envmaster-default"
+  # spec 13 FR-6: auto live-probes default ON for operators — OFF for this suite (env outranks
+  # conf per FR-1), or every legacy run test would fire a probe per lane (extra fake invocations,
+  # ledger rows into the repo's real docs/ops file for tests that don't set LEDGER_FILE). The FR-6
+  # tests re-export PROBE_AUTO=1 themselves.
+  export PROBE_AUTO=0
   BG_PIDS=()
   _install_fakes
 }
@@ -118,8 +123,10 @@ if [[ -n "${FAKE_CLAUDE_WRITE_FILE:-}" ]]; then
   # unfixed find, which had no `-type f`).
   [[ -n "${FAKE_CLAUDE_WRITE_THEN_RM:-}" ]] && rm -f "$FAKE_CLAUDE_WRITE_FILE"
 fi
-if [[ -n "${FAKE_CLAUDE_ONCE_MARKER:-}" && ! -e "$FAKE_CLAUDE_ONCE_MARKER" ]]; then
-  touch "$FAKE_CLAUDE_ONCE_MARKER"
+if [[ -n "${FAKE_CLAUDE_ONCE_MARKER:-}" ]] && mkdir "$FAKE_CLAUDE_ONCE_MARKER" 2>/dev/null; then
+  # mkdir, not `[[ ! -e ]] && touch`: with FANOUT>1 two concurrent invocations both raced past the
+  # -e check and BOTH took the once-mode (seen live in the spec14 FR-8 fixture) — mkdir is atomic,
+  # exactly one invocation wins. Existence checks on the marker still work (it's a dir now).
   case "${FAKE_CLAUDE_ONCE_MODE:-limit}" in
     hang)
       sleep 9999
@@ -156,6 +163,18 @@ if [[ -n "${FAKE_CLAUDE_ONCE_MARKER:-}" && ! -e "$FAKE_CLAUDE_ONCE_MARKER" ]]; t
       # "limit" mode, which emits a real error envelope and exit 1.
       echo '{"type":"init"}'
       printf '{"type":"result","result":"%s"}\n' "${FAKE_CLAUDE_AUTH_TEXT:-OAuth session expired · Please run /login}"
+      exit 0
+      ;;
+    journalwrite)
+      # spec14 FR-8 fixture: a worker that REALLY writes — file on disk (relative to cwd, i.e.
+      # the env -C write cage) AND the matching Write tool_use record in its stream, so a journal
+      # can be derived. The non-once siblings sharing the fake stay narration-only (plain result,
+      # no writes, no tool_use records) — the W3D1 shape.
+      echo '{"type":"init"}'
+      _jw_file="${FAKE_CLAUDE_WRITE_FILE:-journal-made.txt}"
+      printf '%s' "journal write" > "$_jw_file"
+      printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"%s/%s"}}]}}\n' "$PWD" "$_jw_file"
+      printf '{"type":"result","result":"wrote %s"}\n' "$_jw_file"
       exit 0
       ;;
   esac
@@ -3730,4 +3749,282 @@ EOF2
   [ "$status" -eq 0 ]
   [ "$(grep -c '^swarm: lane ' <<<"$output" || true)" = "0" ]
   [ ! -d "$BATS_TEST_TMPDIR/docs/ops/bus-archives" ]
+}
+
+# --- spec 10 FR-R15 (amendment 2026-07-26): bare sidecar tokens resolve at dispatch -------------
+
+@test "spec10 FR-R15: bare .lane pin 'glm' resolves to glm:glm-5.2 at dispatch — worker env gets the real model, loud stderr names the resolution" {
+  # Backlog 62 root cause: a bare token reaches lane_cmd, ${lanemodel#*:} degenerates to the lane
+  # name, and Z.ai answers 400 [1211] Unknown Model. After FR-R15 the dispatch choke point
+  # (_try_claim_one) normalizes via _call_lane_token BEFORE claim, so the worker env carries the
+  # canonical model and the claim filename keeps _claim_meta parseable.
+  _write_conf "claude:opus" 1 15
+  printf 'Z_AI_CODING_KEY=test-glm-key\n' > "$BATS_TEST_TMPDIR/envmaster"
+  export ENV_MASTER_FILE="$BATS_TEST_TMPDIR/envmaster"
+  _fake FAKE_CLAUDE_DUMP_ENV "$BATS_TEST_TMPDIR/bare-glm.env"
+  _fake FAKE_CLAUDE_RESULT "served on resolved glm"
+  _enqueue bt1 "bare glm pin"
+  mkdir -p "$BUS/queue"
+  printf 'glm' > "$BUS/queue/bt1.lane"
+
+  run timeout 20 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/bt1" ]
+  [ "$(jq -r '.lane' "$BUS/done/bt1")" = "glm" ]
+  grep -q "^ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5.2$" "$BATS_TEST_TMPDIR/bare-glm.env"
+  # loud, exactly-once resolution line naming id, bare token, and resolved pair
+  [[ "$output" == *"bt1"*"bare"*"glm:glm-5.2"* ]]
+}
+
+@test "spec10 FR-R15: bare .chain head 'kimi' resolves to kimi:kimi-k3 — never token-as-model" {
+  _write_conf "claude:opus" 1 15
+  printf 'MOONSHOT_API_KEY=test-kimi-key\nZ_AI_CODING_KEY=test-glm-key\n' > "$BATS_TEST_TMPDIR/envmaster"
+  export ENV_MASTER_FILE="$BATS_TEST_TMPDIR/envmaster"
+  _fake FAKE_CLAUDE_DUMP_ENV "$BATS_TEST_TMPDIR/bare-kimi.env"
+  _fake FAKE_CLAUDE_RESULT "served on resolved kimi"
+  _enqueue bt2 "bare kimi chain head"
+  mkdir -p "$BUS/queue"
+  printf 'kimi' > "$BUS/queue/bt2.chain"
+
+  run timeout 20 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/bt2" ]
+  grep -q "^ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k3$" "$BATS_TEST_TMPDIR/bare-kimi.env"
+  grep -vq "^ANTHROPIC_DEFAULT_SONNET_MODEL=kimi$" "$BATS_TEST_TMPDIR/bare-kimi.env"
+  [[ "$output" == *"bt2"*"bare"*"kimi:kimi-k3"* ]]
+}
+
+@test "spec10 FR-R15: a full lane:model pin passes through untouched — zero resolution chatter" {
+  _write_conf "claude:opus" 1 15
+  printf 'Z_AI_CODING_KEY=test-glm-key\n' > "$BATS_TEST_TMPDIR/envmaster"
+  export ENV_MASTER_FILE="$BATS_TEST_TMPDIR/envmaster"
+  _fake FAKE_CLAUDE_DUMP_ENV "$BATS_TEST_TMPDIR/full-pair.env"
+  _fake FAKE_CLAUDE_RESULT "served on explicit pin"
+  _enqueue bt3 "explicit pin"
+  mkdir -p "$BUS/queue"
+  printf 'glm:glm-4.7' > "$BUS/queue/bt3.lane"
+
+  run timeout 20 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/bt3" ]
+  grep -q "^ANTHROPIC_DEFAULT_SONNET_MODEL=glm-4.7$" "$BATS_TEST_TMPDIR/full-pair.env"
+  [[ "$output" != *"bare"* ]]
+}
+
+# --- spec 04 amendment 2026-07-26 (backlog 20): same-lane first-spawn stagger --------------------
+
+@test "backlog-20: a run leaves the per-lane first-spawn marker — stagger is wired into _spawn_worker" {
+  _write_conf "claude:opus" 4 15
+  _fake FAKE_CLAUDE_RESULT "OK"
+  _enqueue sg1 "stagger one"
+  _enqueue sg2 "stagger two"
+
+  run timeout 30 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/sg1" ]
+  [ -f "$BUS/done/sg2" ]
+  [ -d "$BUS/limits/.first-claude" ]
+  # the marker records which worker went first, and it was one of this run's cards
+  first="$(cat "$BUS/limits/.first-claude/id")"
+  [[ "$first" == sg1 || "$first" == sg2 ]]
+}
+
+
+# --- spec 13 FR-6 (backlog 58): event-fired auto live-probes -------------------------------------
+
+@test "spec13 FR-6: pre-claim probe FAIL marks the lane .broken before any spawn — card fails over without burning retries" {
+  cat > "$CONF" <<CONFEOF
+EXEC_CHAIN="glm:glm-5.2 claude:opus"
+FANOUT=2
+LEASE_MIN=15
+CONFEOF
+  export PROBE_AUTO=1
+  export FAKE_CURL_HTTP_CODE=401
+  export LEDGER_FILE="$BATS_TEST_TMPDIR/fr6-ledger.md"
+  _fake FAKE_CLAUDE_RESULT "OK"
+  _enqueue pb1 "probe route-around"
+
+  run timeout 40 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/pb1" ]
+  grep -q '"lane":"claude"' "$BUS/done/pb1"
+  [ -f "$BUS/limits/glm.broken" ]
+  grep -q '^FAIL pre-claim' "$BUS/limits/.probed-glm"
+  [[ "$output" == *"failed its pre-claim live probe"* ]]
+  grep -q "doctor-probe (glm)" "$LEDGER_FILE"
+}
+
+@test "spec13 FR-6: exactly one probe per lane per run — three cards, one probe invocation" {
+  cat > "$CONF" <<CONFEOF
+EXEC_CHAIN="claude:opus"
+FANOUT=2
+LEASE_MIN=15
+CONFEOF
+  export PROBE_AUTO=1
+  export LEDGER_FILE="$BATS_TEST_TMPDIR/fr6-ledger2.md"
+  _fake FAKE_CLAUDE_RESULT "OK"
+  _fake FAKE_CLAUDE_ARGV_FILE "$BATS_TEST_TMPDIR/fr6-argv"
+  _enqueue m1 "one"
+  _enqueue m2 "two"
+  _enqueue m3 "three"
+
+  run timeout 40 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/m1" ]
+  [ -f "$BUS/done/m2" ]
+  [ -f "$BUS/done/m3" ]
+  grep -q '^PASS pre-claim' "$BUS/limits/.probed-claude"
+  # 3 worker invocations + exactly 1 probe invocation = 4 fake-claude calls
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/fr6-argv")" -eq 4 ]
+}
+
+@test "spec13 FR-6: PROBE_AUTO=0 disables auto probes entirely — no marker written" {
+  _write_conf "claude:opus" 2 15
+  _fake FAKE_CLAUDE_RESULT "OK"
+  _enqueue off1 "no probe"
+
+  run timeout 20 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/off1" ]
+  [ ! -e "$BUS/limits/.probed-claude" ]
+}
+
+@test "spec13 FR-6 criterion 2+4: a healthy pre-claim outcome suppresses the reactive probe — marker never rewritten by a later instant-error" {
+  cat > "$CONF" <<CONFEOF
+EXEC_CHAIN="glm:glm-5.2 claude:opus"
+FANOUT=2
+LEASE_MIN=15
+CONFEOF
+  export PROBE_AUTO=1
+  export LEDGER_FILE="$BATS_TEST_TMPDIR/fr6-ledger3.md"
+  # glm's pre-claim probe goes over fake curl (healthy 200 -> PASS marker); the glm WORKER rides
+  # the fake claude binary, whose first invocation serves the auth-death text shape (instant-error
+  # class at finalize) — the reactive arm fires, sees the PASS marker, and must not rewrite it.
+  _fake FAKE_CLAUDE_RESULT "OK"
+  _fake FAKE_CLAUDE_ONCE_MARKER "$BATS_TEST_TMPDIR/fr6-once"
+  _fake FAKE_CLAUDE_ONCE_MODE "autherr"
+  _enqueue sup1 "reactive suppression"
+
+  run timeout 40 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/sup1" ]
+  grep -q '^PASS pre-claim' "$BUS/limits/.probed-glm"
+  [[ "$(<"$BUS/limits/.probed-glm")" != *reactive* ]]
+  # exactly one glm probe ledger row — the reactive event added none
+  [ "$(grep -c 'doctor-probe (glm)' "$LEDGER_FILE")" -eq 1 ]
+}
+
+# --- spec 14 FR-8 (backlog 59): per-card write-journal in shared cages ---------------------------
+
+@test "spec14 FR-8: shared cage — the journal-owning writer passes the gate, the narration-only sibling fails with the W3D1 signature" {
+  # Both cards target ONE cage, concurrently live (FANOUT=2). The once-mode makes exactly one
+  # worker a real writer (file + Write tool_use record); the other narrates and writes nothing.
+  # Pre-FR-8 the narrator finalized done on the WRITER's bytes (the W3D1 blind spot); now its own
+  # empty journal fails the gate and it parks after retries.
+  _write_conf "claude:opus" 2 15
+  local cage="$BATS_TEST_TMPDIR/sharedcage"
+  mkdir -p "$cage"
+  _fake FAKE_CLAUDE_RESULT "narrated a great success, wrote nothing"
+  _fake FAKE_CLAUDE_ONCE_MARKER "$BATS_TEST_TMPDIR/j-once"
+  _fake FAKE_CLAUDE_ONCE_MODE "journalwrite"
+  _fake FAKE_CLAUDE_WRITE_FILE "made.txt"
+  _enqueue wa "shared-cage card A"
+  printf '%s' "$cage" > "$BUS/specs/wa.write"
+  _enqueue wb "shared-cage card B"
+  printf '%s' "$cage" > "$BUS/specs/wb.write"
+
+  run timeout 40 "$RUNSH"
+  # exactly ONE of the two finalizes done (the writer — once-mode picks whichever spawned first);
+  # the other parks after its retries, never credited with the sibling's bytes
+  local done_n parked_n
+  done_n=$(ls "$BUS/done" 2>/dev/null | wc -l)
+  [ "$done_n" -eq 1 ]
+  [ -f "$cage/made.txt" ]
+  [[ -f "$BUS/limits/wa.parked" || -f "$BUS/limits/wb.parked" ]]
+  [[ "$output" == *"W3D1"* ]]
+}
+
+@test "spec14 FR-8: a SOLE unmanifested write card keeps the whole-cage sweep — no journal required (out-of-scope guard)" {
+  _write_conf "claude:opus" 2 15
+  local cage="$BATS_TEST_TMPDIR/solecage"
+  mkdir -p "$cage"
+  # writes a real file but emits NO tool_use records (the legacy fake write path) — a single-card
+  # cage must still pass on bytes alone, exactly as before FR-8
+  _fake FAKE_CLAUDE_RESULT "did the work"
+  _fake FAKE_CLAUDE_WRITE_FILE "solo.txt"
+  _enqueue solo1 "sole write card"
+  printf '%s' "$cage" > "$BUS/specs/solo1.write"
+
+  run timeout 25 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/solo1" ]
+  [ -f "$cage/solo.txt" ]
+  [[ "$output" != *"W3D1"* ]]
+}
+
+# --- spec 20 (backlog 11/21): per-run bus namespacing via --run ----------------------------------
+
+@test "spec20 FR-1: --run derives BUSDIR=.bus-<label> and the run label, atomically" {
+  _write_conf "claude:opus" 2 15
+  _fake FAKE_CLAUDE_RESULT "OK"
+  export UNIMATRIX_BUS_ROOT="$BATS_TEST_TMPDIR"
+  mkdir -p "$BATS_TEST_TMPDIR/.bus-alpha/specs"
+  printf '%s' "namespaced card" > "$BATS_TEST_TMPDIR/.bus-alpha/specs/na1.prompt"
+
+  run env -u BUSDIR -u SPEEDWARS_RUN timeout 30 "$RUNSH" --run alpha ""
+  [ "$status" -eq 0 ]
+  [ -f "$BATS_TEST_TMPDIR/.bus-alpha/done/na1" ]
+  [ "$(<"$BATS_TEST_TMPDIR/.bus-alpha/.run-label")" = "alpha" ]
+}
+
+@test "spec20 FR-1 precedence: explicit BUSDIR env beats the --run derivation" {
+  _write_conf "claude:opus" 2 15
+  _fake FAKE_CLAUDE_RESULT "OK"
+  export UNIMATRIX_BUS_ROOT="$BATS_TEST_TMPDIR"
+  _enqueue pv1 "env wins"
+
+  run timeout 30 "$RUNSH" --run beta ""
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/pv1" ]
+  [ ! -d "$BATS_TEST_TMPDIR/.bus-beta" ]
+}
+
+@test "spec20 FR-1: an invalid --run label (path characters) is refused at parse time" {
+  run "$RUNSH" --run "../evil" ""
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid --run label"* ]]
+}
+
+@test "spec20 FR-3: a LIVE heartbeat refuses the run loudly; UNIMATRIX_BUS_OWNER=1 (loop child) bypasses" {
+  _write_conf "claude:opus" 2 15
+  _fake FAKE_CLAUDE_RESULT "OK"
+  mkdir -p "$BUS"
+  touch "$BUS/heartbeat"
+  _enqueue hb1 "collision card"
+
+  run timeout 20 "$RUNSH" ""
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"LIVE"* ]]
+  [ ! -e "$BUS/done/hb1" ]
+
+  run env UNIMATRIX_BUS_OWNER=1 timeout 30 "$RUNSH" ""
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/hb1" ]
+}
+
+@test "spec20 FR-3: a STALE heartbeat (>60s) resumes the bus silently" {
+  _write_conf "claude:opus" 2 15
+  _fake FAKE_CLAUDE_RESULT "OK"
+  mkdir -p "$BUS"
+  touch -d '-2 minutes' "$BUS/heartbeat"
+  _enqueue hb2 "resume card"
+
+  run timeout 30 "$RUNSH" ""
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/hb2" ]
+}
+
+@test "spec20 FR-9: usage text documents the --run flag" {
+  run "$RUNSH" --plan-only
+  [[ "$output" == *"--run <label>"* ]]
 }

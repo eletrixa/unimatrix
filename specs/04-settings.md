@@ -136,6 +136,16 @@ lanes), `REVIEW` (non-empty, bare prefix validated), and `VERIFY_MAP` (both side
 `generator:verifier` pair validated; empty map stays valid) — a malformed token dies at load, and
 never reaches `lane_cmd`/`speed_row`.
 
+**Amendment 2026-07-26 (backlog 49 + backlog 20) — codex config.toml mirror + same-lane spawn stagger.**
+
+Part 1: **Codex config.toml mirroring in scratch HOME.** The codex arm of `_scratch_home` (src/swarm-lib.sh ~788-791) currently mirrors only `auth.json`, leaving the operator's `~/.codex/config.toml` (which sets reasoning effort, output format, and other tuning) absent from the bus-spawned scratch HOME. This silent quality downgrade causes codex workers to run at `reasoning_effort:none` (the CLI's fallback) instead of the configured level, plus cold-start overhead — observed 17–25% token bloat on default REVIEW-lane cards. NEW requirement: the codex arm MUST also copy `config.toml` when present in the real HOME. **SCOPE FENCE:** this applies to the CODEX arm ONLY — grok's config exclusion (tests/swarm-lib.bats:595) is a locked containment decision, unchanged; claude's arm is untouched. The per-class timeout half of backlog 49 remains closed as a spec-14 non-goal.
+
+Part 2: **First-spawn stagger per lane.** Incident: 4 simultaneous grok first-spawns all failed with "Not signed in" at t=0 (auth herd failure, all hitting grok's rate-limit gate before any auth refresh completes). NEW requirement: the pool serializes (or staggers by a small fixed delay) the FIRST spawn per lane per run; subsequent same-lane spawns are unrestricted once any worker on that lane has produced output. A small initial delay per lane is acceptable. No new config knob unless one already fits existing keys; if a new knob is introduced, name it explicitly and give the baked default (zero = off, or a small positive integer for delay milliseconds). *(Shipped 2026-07-26: `_stagger_first_spawn` in `src/swarm-lib.sh`, called from `_spawn_worker` immediately before the CLI launch. Knob: `STAGGER_FIRST_SPAWN_SEC`, baked default 10 — the bound in seconds a same-lane follower waits for the lane's first worker to show output bytes in its run log; 0 = off. Always returns 0 — de-simultaneity only, never a health gate; spec 13's markers own lane health.)*
+
+**Acceptance (amendment):**
+- Codex part: `bats tests/swarm-lib.bats` includes a test asserting that when `~/.codex/config.toml` exists, the scratch HOME's codex arm also contains `config.toml` at the same relative path; a companion assert confirms grok/claude arms are unchanged.
+- Spawn stagger part: a scripted or bats check verifies that with `FANOUT >= 4` and 4 same-lane cards queued, the first worker on that lane starts alone before workers 2–4 launch; the stagger does not block cross-lane parallelism (grok 1 starts alone, then grok 2–4 can start immediately after grok 1 produces output, in parallel with claude 1–4 starting without delay).
+
 ### Functional
 
 | ID | Requirement | Priority |

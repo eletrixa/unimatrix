@@ -613,6 +613,36 @@ teardown() {
   [ "$(stat -c %a "$grok_home/.grok/auth.json")" = "600" ]
 }
 
+@test "_scratch_home: codex mirrors config.toml when present — codex arm ONLY (spec 04 amendment 2026-07-26)" {
+  bus_init "$BUS"
+  mkdir -p "$HOME/.codex" "$HOME/.claude" "$HOME/.grok"
+  echo '{"key":"real-codex-auth"}' > "$HOME/.codex/auth.json"
+  echo 'model_reasoning_effort = "high"' > "$HOME/.codex/config.toml"
+  echo '{"token":"real-session"}' > "$HOME/.claude/.credentials.json"
+  echo '{"token":"real-grok-oauth"}' > "$HOME/.grok/auth.json"
+  echo '[mcp_servers]' > "$HOME/.grok/config.toml"
+
+  codex_home="$(_scratch_home "$BUS" codex)"
+  [ "$(<"$codex_home/.codex/config.toml")" = 'model_reasoning_effort = "high"' ]
+  [ "$(<"$codex_home/.codex/auth.json")" = '{"key":"real-codex-auth"}' ]
+
+  # scope fence: grok's config.toml exclusion is a locked containment decision; claude untouched
+  grok_home="$(_scratch_home "$BUS" grok)"
+  [ ! -e "$grok_home/.grok/config.toml" ]
+  claude_home="$(_scratch_home "$BUS" claude)"
+  [ ! -e "$claude_home/.claude/config.toml" ]
+}
+
+@test "_scratch_home: codex without a real config.toml stays auth-only" {
+  bus_init "$BUS"
+  mkdir -p "$HOME/.codex"
+  echo '{"key":"a"}' > "$HOME/.codex/auth.json"
+
+  codex_home="$(_scratch_home "$BUS" codex)"
+  [ "$(<"$codex_home/.codex/auth.json")" = '{"key":"a"}' ]
+  [ ! -e "$codex_home/.codex/config.toml" ]
+}
+
 @test "_scratch_home: gemini/glm get a bare empty scratch home" {
   bus_init "$BUS"
   mkdir -p "$HOME/.claude"
@@ -631,6 +661,105 @@ teardown() {
 
   kimi_home="$(_scratch_home "$BUS" kimi)"
   [ -z "$(ls -A "$kimi_home" 2>/dev/null)" ]
+}
+
+# --- _write_journal (spec 14 FR-8, backlog 59) ------------------------------------
+
+@test "_write_journal: unique write-class paths from the worker stream, read-class noise ignored" {
+  bus_init "$BUS"
+  {
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/cage/readme.md"}}]}}'
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/cage/a.txt"}}]}}'
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/cage/a.txt"}},{"type":"tool_use","name":"Edit","input":{"file_path":"/cage/b.txt"}}]}}'
+    printf '%s\n' '{"type":"result","result":"done"}'
+  } > "$BUS/run-j1.jsonl"
+
+  run _write_journal "$BUS" j1
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "/cage/a.txt" ]
+  [ "${lines[1]}" = "/cage/b.txt" ]
+  [ "${#lines[@]}" -eq 2 ]
+}
+
+@test "_write_journal: empty or missing stream yields an empty journal, rc 0" {
+  bus_init "$BUS"
+  run _write_journal "$BUS" nolog
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# --- _stagger_first_spawn (spec 04 amendment 2026-07-26, backlog 20) --------------
+
+@test "_stagger_first_spawn: first caller per lane claims the marker and returns immediately" {
+  bus_init "$BUS"
+  STAGGER_FIRST_SPAWN_SEC=10 _stagger_first_spawn "$BUS" grok g1
+  [ -d "$BUS/limits/.first-grok" ]
+  [ "$(<"$BUS/limits/.first-grok/id")" = "g1" ]
+}
+
+@test "_stagger_first_spawn: follower returns promptly once the first worker's run log has bytes" {
+  bus_init "$BUS"
+  STAGGER_FIRST_SPAWN_SEC=10 _stagger_first_spawn "$BUS" grok g1
+  echo '{"type":"init"}' > "$BUS/run-g1.jsonl"
+  local t0 t1
+  t0=$(date +%s%N)
+  STAGGER_FIRST_SPAWN_SEC=10 _stagger_first_spawn "$BUS" grok g2
+  t1=$(date +%s%N)
+  # first already produced output — follower must not sit out the bound
+  (( (t1 - t0) / 1000000 < 3000 ))
+}
+
+@test "_stagger_first_spawn: follower actually waits for the first worker's output, then proceeds" {
+  bus_init "$BUS"
+  STAGGER_FIRST_SPAWN_SEC=10 _stagger_first_spawn "$BUS" grok g1
+  ( sleep 0.6; echo '{"type":"init"}' > "$BUS/run-g1.jsonl" ) &
+  PIDA=$!
+  local t0 t1 ms
+  t0=$(date +%s%N)
+  STAGGER_FIRST_SPAWN_SEC=10 _stagger_first_spawn "$BUS" grok g2
+  t1=$(date +%s%N)
+  ms=$(( (t1 - t0) / 1000000 ))
+  # waited for the bytes (>=400ms) but nowhere near the 10s bound
+  (( ms >= 400 && ms < 5000 ))
+  wait "$PIDA" 2>/dev/null || true
+}
+
+@test "_stagger_first_spawn: bound expires without first-worker output — returns 0, never parks the lane" {
+  bus_init "$BUS"
+  STAGGER_FIRST_SPAWN_SEC=1 _stagger_first_spawn "$BUS" grok g1
+  run env STAGGER_FIRST_SPAWN_SEC=1 bash -c "source '$LIB'; _stagger_first_spawn '$BUS' grok g2"
+  [ "$status" -eq 0 ]
+}
+
+@test "_stagger_first_spawn: STAGGER_FIRST_SPAWN_SEC=0 disables the gate entirely (no marker)" {
+  bus_init "$BUS"
+  STAGGER_FIRST_SPAWN_SEC=0 _stagger_first_spawn "$BUS" grok g1
+  [ ! -e "$BUS/limits/.first-grok" ]
+}
+
+@test "_stagger_first_spawn: cross-lane parallelism untouched — lane B's first ignores lane A's marker" {
+  bus_init "$BUS"
+  STAGGER_FIRST_SPAWN_SEC=10 _stagger_first_spawn "$BUS" grok g1
+  # no run-g1.jsonl bytes — a same-lane follower would wait; a different lane must not
+  local t0 t1
+  t0=$(date +%s%N)
+  STAGGER_FIRST_SPAWN_SEC=10 _stagger_first_spawn "$BUS" claude c1
+  t1=$(date +%s%N)
+  (( (t1 - t0) / 1000000 < 3000 ))
+  [ -d "$BUS/limits/.first-claude" ]
+}
+
+@test "conf_load: PROBE_AUTO baked default is 1 (spec 13 FR-6 auto-probes on for operators)" {
+  run env -u PROBE_AUTO bash -c "source '$LIB'; conf_load /nonexistent; echo \$PROBE_AUTO"
+  [ "$output" = "1" ]
+}
+
+@test "conf_load: STAGGER_FIRST_SPAWN_SEC baked default is 10 and file value overrides it" {
+  conf_load /nonexistent
+  [ "$STAGGER_FIRST_SPAWN_SEC" = "10" ]
+  echo 'STAGGER_FIRST_SPAWN_SEC=0' > "$BATS_TEST_TMPDIR/conf"
+  run env -u STAGGER_FIRST_SPAWN_SEC bash -c "source '$LIB'; conf_load '$BATS_TEST_TMPDIR/conf'; echo \$STAGGER_FIRST_SPAWN_SEC"
+  [ "$output" = "0" ]
 }
 
 # --- lane_cmd ----------------------------------------------------------------
@@ -2379,7 +2508,7 @@ _stub_curl() {
   [ ! -e "$(dirname "$BUS")/docs" ]
 }
 
-@test "speed_row: codex turn.completed envelope — tokens + turn count, no cost field" {
+@test "speed_row: codex turn.completed envelope — tokens + turn count + gpt-5-codex list recompute (fresh = in − cached)" {
   bus_init "$BUS"
   export SPEEDWARS_FILE="$BATS_TEST_TMPDIR/sw4.jsonl"
   {
@@ -2393,7 +2522,48 @@ _stub_curl() {
   [ "$(jq -r '.tokens_in' "$SPEEDWARS_FILE")" = "600" ]
   [ "$(jq -r '.tokens_reasoning' "$SPEEDWARS_FILE")" = "12" ]
   [ "$(jq -r '.turns' "$SPEEDWARS_FILE")" = "2" ]
-  [ "$(jq -r '.cost_usd // "absent"' "$SPEEDWARS_FILE")" = "absent" ]
+  # spec 08 2026-07-26 amendment: (600-300)*1.25 + 300*0.125 + 50*10 = 912.5 → /1e6
+  [ "$(jq -r '.cost_usd == 0.0009125' "$SPEEDWARS_FILE")" = "true" ]
+  [ "$(jq -r '.cost_basis' "$SPEEDWARS_FILE")" = "recomputed-list" ]
+}
+
+@test "speed_row: glm cost_usd is ALWAYS recomputed at Z.ai list — the claude-priced envelope figure never survives" {
+  bus_init "$BUS"
+  export SPEEDWARS_FILE="$BATS_TEST_TMPDIR/sw-glm-cost.jsonl"
+  {
+    echo '{"type":"assistant","message":{"model":"glm-5.2"}}'
+    echo '{"type":"result","num_turns":1,"usage":{"input_tokens":1000000,"cache_creation_input_tokens":500000,"cache_read_input_tokens":1000000,"output_tokens":100000},"total_cost_usd":9.99}'
+  } > "$BUS/run-spg1.jsonl"
+
+  speed_row "$BUS" spg1 "glm:glm-5.2" done 0 1
+
+  # (1.0M + 0.5M fresh-class) * 1.40 + 1.0M * 0.26 + 0.1M * 4.40 = 2.10 + 0.26 + 0.44 = 2.80
+  [ "$(jq -r '.cost_usd == 2.8' "$SPEEDWARS_FILE")" = "true" ]
+  [ "$(jq -r '.cost_usd == 9.99' "$SPEEDWARS_FILE")" = "false" ]
+  [ "$(jq -r '.cost_basis' "$SPEEDWARS_FILE")" = "recomputed-list" ]
+}
+
+@test "speed_row: cost_basis vocabulary — grok envelope-pool, grok recomputed fallback, gemini unpriced, claude envelope-list" {
+  bus_init "$BUS"
+  export SPEEDWARS_FILE="$BATS_TEST_TMPDIR/sw-basis.jsonl"
+
+  printf '%s\n' '{"type":"end","total_cost_usd":0.05,"usage":{"input_tokens":100,"output_tokens":10},"num_turns":1,"stopReason":"done"}' > "$BUS/run-b1.jsonl"
+  speed_row "$BUS" b1 "grok:grok-4.5" done 0 0
+  printf '%s\n' '{"type":"end","usage":{"input_tokens":30000,"cache_read_input_tokens":20000,"output_tokens":1000},"num_turns":1,"stopReason":"done"}' > "$BUS/run-b2.jsonl"
+  speed_row "$BUS" b2 "grok:grok-4.5" done 0 0
+  printf '%s\n' '{"type":"result","stats":{"input_tokens":900,"output_tokens":80,"cached":400,"duration_ms":1}}' > "$BUS/run-b3.jsonl"
+  speed_row "$BUS" b3 "gemini:gemini-2.5-pro" done 0 0
+  printf '%s\n' '{"type":"result","num_turns":1,"usage":{"input_tokens":10,"output_tokens":5},"total_cost_usd":0.01}' > "$BUS/run-b4.jsonl"
+  speed_row "$BUS" b4 "claude:sonnet" done 0 0
+
+  [ "$(jq -rs '.[0].cost_basis' "$SPEEDWARS_FILE")" = "envelope-pool" ]
+  [ "$(jq -rs '.[1].cost_basis' "$SPEEDWARS_FILE")" = "recomputed-list" ]
+  # (30000-20000)*2.0 + 20000*0.30 + 1000*6.0 = 32000 → /1e6
+  [ "$(jq -rs '.[1].cost_usd == 0.032' "$SPEEDWARS_FILE")" = "true" ]
+  [ "$(jq -rs '.[2].cost_basis' "$SPEEDWARS_FILE")" = "unpriced-tier-unknown" ]
+  [ "$(jq -rs '.[2] | has("cost_usd")' "$SPEEDWARS_FILE")" = "false" ]
+  [ "$(jq -rs '.[3].cost_basis' "$SPEEDWARS_FILE")" = "envelope-list" ]
+  [ "$(jq -rs '.[3].cost_usd == 0.01' "$SPEEDWARS_FILE")" = "true" ]
 }
 
 @test "speed_row: gemini result.stats envelope + non-done outcome recorded" {

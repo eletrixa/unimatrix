@@ -56,6 +56,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=src/swarm-lib.sh
 source "$SCRIPT_DIR/src/swarm-lib.sh"
 
+# spec 20 FR-5: `--run <label>` before the subcommand — same one-token derivation as swarm-run.sh
+# (BUSDIR=.bus-<label> + SPEEDWARS_RUN=<label>, explicit env still winning), so every iteration of
+# a loop shares one bus and one ledger key atomically. The label is also passed through to each
+# iteration's swarm-run.sh invocation (belt and braces — the env already pins both).
+RUN_LABEL=""
+while [[ "${1:-}" == --run ]]; do
+  if [[ $# -lt 2 ]]; then echo "swarm-loop: --run needs a label" >&2; exit 1; fi
+  RUN_LABEL="$2"; shift 2
+done
+if [[ -n "$RUN_LABEL" && ! "$RUN_LABEL" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "swarm-loop: invalid --run label '$RUN_LABEL' (allowed: A-Za-z0-9._-)" >&2
+  exit 1
+fi
+if [[ -z "${BUSDIR:-}" && -n "$RUN_LABEL" ]]; then
+  BUSDIR="${UNIMATRIX_BUS_ROOT:-$SCRIPT_DIR}/.bus-$RUN_LABEL"
+fi
+if [[ -n "$RUN_LABEL" && -z "${SPEEDWARS_RUN:-}" ]]; then
+  export SPEEDWARS_RUN="$RUN_LABEL"
+fi
 # realpath -m: same normalization as swarm-run.sh, same reason (FR-15's env -C write-target chdir
 # would otherwise re-resolve a relative $BUSDIR against the worktree downstream).
 # realpath -m is GNU-only; BSD/macOS realpath has no -m. Feature-detect and hand-normalize otherwise.
@@ -71,9 +90,12 @@ SWARM_CTL="${SWARM_CTL:-$SCRIPT_DIR/src/swarm-ctl}"
 
 usage() {
   cat >&2 <<'EOF'
-usage: swarm-loop.sh init <run-id>      # scaffold criteria.md/steering.md/state.jsonl from env
-       swarm-loop.sh iterate <run-id>   # run exactly one iteration
-       swarm-loop.sh run <run-id>       # iterate until a stop rule fires
+usage: swarm-loop.sh [--run <label>] init <run-id>      # scaffold criteria.md/steering.md/state.jsonl from env
+       swarm-loop.sh [--run <label>] iterate <run-id>   # run exactly one iteration
+       swarm-loop.sh [--run <label>] run <run-id>       # iterate until a stop rule fires
+
+--run <label> (spec 20): derives BUSDIR=.bus-<label> + SPEEDWARS_RUN=<label>, and is passed through
+to every iteration's swarm-run.sh invocation. Explicit env vars override the derivation.
 EOF
   exit 1
 }
@@ -351,7 +373,12 @@ _run_pool_once() {
   # ponytail: swarm-run.sh's own exit code isn't ours to rely on (specs/01 FR-7: a parked branch
   # now makes it exit nonzero instead of hanging forever, per the gap flagged from this build) —
   # the caller already checks for the res-<id>.txt file either way, so tolerate any exit here.
-  BUSDIR="$BUSDIR" CONF="$CONF" FANOUT=1 "$SWARM_RUN" || true
+  # UNIMATRIX_BUS_OWNER=1 (spec 20 FR-3 amendment): the heartbeat keeping this bus "live" is OUR
+  # OWN, refreshed by the loop above — without the ownership assertion the child run would refuse
+  # its own parent's bus. ${RUN_LABEL:+--run} passes the label through per FR-5.
+  # shellcheck disable=SC2086
+  BUSDIR="$BUSDIR" CONF="$CONF" FANOUT=1 UNIMATRIX_BUS_OWNER=1 \
+    "$SWARM_RUN" ${RUN_LABEL:+--run "$RUN_LABEL"} || true
   kill "$_hb_pid" 2>/dev/null || true
   wait "$_hb_pid" 2>/dev/null || true
 }

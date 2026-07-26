@@ -26,6 +26,7 @@ a read-only tmux/WezTerm monitoring cockpit. No MCP, no daemon, no DB.
 | [16-unified-cli](./16-unified-cli.md) | Active | `unimatrix` umbrella CLI: thin git-style router over the four scripts, flattened ctl verbs, `u-` slash-command namespace with alias stubs |
 | [17-plugin](./17-plugin.md) | Active | Plugin packaging: `/u:*` colon namespace from any repo/account via self-marketplace, generated pointer commands, `unimatrix install`/`here`, `doctor --plugin` drift table |
 | [18-evidence-contract](./18-evidence-contract.md) | Active | Push summary + bus archives + `report --html` + fleetops producer contract (`sql/uni-schema.sql`, D1 contract-first) + D2 gate; executable mirror reserved for spec 19 |
+| [20-bus-namespacing](./20-bus-namespacing.md) | Active | Per-run bus namespacing: one `--run <label>` atomically derives BUSDIR + SPEEDWARS_RUN + cockpit identity; live-heartbeat collision refusal (backlog 11/21; FR-7 fleet view staged) |
 
 ## Dependency Graph
 

@@ -152,3 +152,55 @@ while `BUDGET_USD=0` consults new conf key `PAYG_FALLBACK` (`warn` default | `al
 ## Open questions
 
 None outstanding.
+
+---
+
+## Amendment — 2026-07-26 (FR-2 auto-wire: event-fired live probes)
+
+**Motivation:** `doctor --live` (FR-2, shipped 2026-07-25) is opt-in; runs still burn 3 strikes per lane
+on dead cheap lanes before failover — run brain058 seeded 8 cards grok/glm-first and executed 0 there,
+defeating cost offload (backlog 58, MAJOR). Live probes must fire automatically to catch dead lanes
+before any worker spawns.
+
+*(Shipped 2026-07-26: `_probe_lane_event` in `swarm-run.sh` — pre-claim arm in `_try_claim_one`
+immediately before `claim()`, reactive arm in `_finalize_worker` on the api-error/auth-death/
+server-error classes. Marker `limits/.probed-<lane>` enforces once-per-lane-per-run; any existing
+marker — including a healthy pre-claim PASS — suppresses later events (criterion 2), and a lane
+already carrying `.broken`/`.dead`/`.limited` is never probed (criterion 4). New conf knob
+`PROBE_AUTO`, baked default 1.)*
+
+**NEW requirement (FR-6):** The live probe fires automatically at exactly two EVENTS, once per lane per
+run:
+
+1. **Pre-claim:** When a lane is about to receive its FIRST card of the run and has no probe result
+   yet — immediately before `_try_claim_one` would spawn into it.
+2. **Reactively:** On a lane's first instant-error (a 0-token synthetic result with `is_error:true`
+   during finalize) — catches auth/endpoint failures that slipped the preflight.
+
+Probe outcome feeds the EXISTING `.broken`/`.dead`/`.limited` marker machinery — nothing new consumes
+it. Probes remain non-billable (event-fired, not cards); only probes that can bill are logged via
+`ledger_row` (e.g., `doctor-probe (lane)`), same as FR-2 `doctor --live`.
+
+**Non-Goals (reaffirmed, verbatim-in-spirit):**
+
+- No standing daemon, no periodic health poller — probes run at launch (pre-claim), on demand
+  (`doctor --live`), or reactively (first instant-error) only; no background polling or scheduled
+  re-probes between events.
+- No change to marker TTL semantics — `.limited` aging, `.dead` no-TTL, and clear conditions are untouched.
+- No auto-retry/backoff logic changes — `.broken` reuses the existing `lane_blocked` routing;
+  chain semantics (spec 01/10) unchanged.
+- No new CLI dependency: probes use `curl` (already required by the stack) for env-key endpoints
+  and the lane CLIs themselves for OAuth lanes.
+- Plain `doctor` stays read-only and free — probes never run without `--live` or event trigger;
+  no silent spend outside established `doctor --live` or worker-spawn paths.
+
+**Acceptance criteria (FR-6):**
+
+1. Kill a lane's auth (e.g., env var unset), seed a chain-first card → lane marked `.broken`
+   before any worker spawn; card fails over without burning `MAX_LANE_RETRIES`.
+2. A healthy-lane run performs at most one probe per lane (pre-claim fires once; healthy outcome
+   suppresses reactive probe on later instant-errors).
+3. SPEEDWARS ledger shows no probe rows (probes are not cards); only billable probes land in the
+   ledger via existing `doctor-probe (<lane>)` entry.
+4. A reactive probe on a lane that already carries a `.broken`/`.dead`/`.limited` marker is a
+   no-op — probes never re-write, refresh, or clear existing markers.

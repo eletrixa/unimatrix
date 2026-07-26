@@ -100,7 +100,7 @@ diff-presence check for `.write` branches is the fix that covers both variants; 
 10. **Timeout finalize must diff-check `.write` targets before discarding (MAJOR).** **DONE** via spec 01 FR-12 amendment (2026-07-25, backlog 17+10); timeout-salvaged outcome — r1-rows was
    killed at 613s during its handoff phase with ALL work already on disk (8 tests, 38 asserts) —
    logged `timeout`, adopted manually. Finalize now inspects on-disk diff for timeout attempts and keeps genuine work; see spec 01 §FR-12 timeout salvage (lines 63+) for the amendment.
-11. **Per-run bus namespacing (MAJOR).** Two orchestrator sessions shared the default `.bus`:
+11. **Per-run bus namespacing (MAJOR).** **DONE** via spec 20 (`--run <label>` derives BUSDIR+SPEEDWARS_RUN atomically + live-heartbeat collision refusal; shipped 3c8e21c, 2026-07-26). Two orchestrator sessions shared the default `.bus`:
    the other session's pool swept this run's specs at its enqueue, evicted six to `cancelled/`,
    ran one as an unpinned read-only stray, and its verify wave verified the foreign branch.
    Default the busdir to `.bus/<run-label>/` (or stamp specs with a run id the pool filters on).
@@ -157,13 +157,13 @@ diff-presence check for `.write` branches is the fix that covers both variants; 
     (tree moved) or worktree-cleanliness overclaims. write_verify_spec should instruct: judge
     ONLY this card's diff vs its prompt; other sessions edit this tree concurrently.
 
-20. **Same-lane first-spawn auth herd (MAJOR — 4 parked branches).** brain-053-remed: 4
+20. **Same-lane first-spawn auth herd (MAJOR — 4 parked branches).** **DONE** via spec 04 amendment 2026-07-26 (`_stagger_first_spawn`, `STAGGER_FIRST_SPAWN_SEC` default 10; shipped fc20bd0). brain-053-remed: 4
     simultaneous grok spawns all failed "Not signed in" at t=0 (burst), while the engine's
     staggered retries later all succeeded — the herd, not the token, was the blocker. Add a
     small same-lane spawn stagger (2-5s jitter) or serialize each lane's FIRST auth per run.
     (Distinct from #15's mkdir race and from the stale-master rotation both fixed in b876b76.)
 
-21. **Run-namespaced bus as a first-class flag (MAJOR — cross-session interference).** Three
+21. **Run-namespaced bus as a first-class flag (MAJOR — cross-session interference).** **DONE** via spec 20 (shipped 3c8e21c; cockpit multi-bus fleet view staged as spec 20 FR-7, its own wave). Three
     swarms shared the default `.bus` on 2026-07-19; one orchestrator CANCELLED another's 7
     seeded cards, and the recovery cost manual busdir surgery + three cockpit ports
     (4747/4749/4750). `swarm-run --run <label>` should derive BUSDIR, SPEEDWARS_RUN, and the
@@ -295,7 +295,7 @@ diff-presence check for `.write` branches is the fix that covers both variants; 
     unprobed, claude-family only. Needs a live probe before specing.
 49. **Codex REVIEW-class cards routinely need timeout above the current default; repeated
     timeout-kills misreport as "retries exhausted"/false-done, masking the real root
-    cause (MAJOR, needs verification)** (feedback:
+    cause (MAJOR, needs verification)** **DONE (both halves)**: per-class timeout closed as spec 14 non-goal (per-lane `TIMEOUT_CODEX` already exists); the hidden quality half — bus-spawned codex running at `reasoning_effort:none` because the scratch cage lacked `config.toml` — shipped via spec 04 amendment 2026-07-26 (f7393a0). (feedback:
     `2026-07-25-grpn-refactor-codex-lane-wrapper-unusable.md`,
     `2026-07-25-grpn-refactor-glm-never-claims-codex-timeout.md`; runs atlas013,
     parity012; corroborated by auto-stubs `2026-07-25-unimatrix-atlas013-auto-parked.md`,
@@ -460,7 +460,7 @@ diff-presence check for `.write` branches is the fix that covers both variants; 
     salvage doctrine). Ask: investigate whether the write cage can drop completed writes
     when its process dies on an auth error (same 11:30 auth-blip window as row 54 —
     likely the same incident). → needs live repro before any FR.
-58. **Doctor passes dead child-env-swap lanes (glm/kimi) — needs a live-probe rung (MAJOR)**
+58. **Doctor passes dead child-env-swap lanes (glm/kimi) — needs a live-probe rung (MAJOR)** **DONE** via spec 13 FR-6 (`_probe_lane_event` pre-claim + reactive, `PROBE_AUTO` default 1; shipped 9643800, 2026-07-26). The codex honest-refusal sniffer ask in the tail stays OPEN (not covered by FR-6).
     (feedback: `2026-07-25-unimatrix-gtm-a-auto-parked.md` +
     `2026-07-25-unimatrix-gtm-b-auto-parked.md`; runs gtm-a/gtm-b) — glm AND kimi both
     died at CLI/auth level (0-token `<synthetic>` errors, `is_error:true`) while doctor
@@ -471,7 +471,7 @@ diff-presence check for `.write` branches is the fix that covers both variants; 
     file … no lasting changes") finalized done/0 — add the refusal class to the
     unusable-answer sniffer (scoped per spec 10 §Amendment to non-salvage paths).
 59. **Per-card write-journal so shared cages can catch zero-write narration false-dones
-    (MAJOR)** (feedback: `2026-07-25-unimatrix-gtm-c-auto-parked.md` + gtm-b report;
+    (MAJOR)** **DONE** via spec 14 FR-8 (`_write_journal` + shared-cage gate arm; claude-binary lanes — grok/codex/gemini streams carry no tool_use records, their cages keep the whole-cage sweep; shipped e316fe5, 2026-07-26). (feedback: `2026-07-25-unimatrix-gtm-c-auto-parked.md` + gtm-b report;
     runs gtm-a/b/c — 5 grok narration false-dones in one evening, all caught by
     orchestrator artifact-gates, none by the diff gate because sibling writes satisfied
     the shared-cage diff). Ask: journal each worker's own Write/Edit tool calls
@@ -484,3 +484,29 @@ diff-presence check for `.write` branches is the fix that covers both variants; 
     rare and stratified coverage climbs. Deferred at P2 (2026-07-26): the literal acceptance
     criterion (denominators everywhere) shipped instead; auto-inferred strata risk fabricating
     signal — needs a design pass on thresholds + a validation set of hand-bucketed runs first.
+
+61. **Verify wave on shared-cage runs judges the COMBINED diff, not the card's own (plan005w0,
+    2026-07-26)** — all 6 wave-0 verify verdicts came back raw-refuted on "edits other files"
+    because every card shared one worktree cage; per-card scoping needs the spec 14 FR-8
+    write-journal as its diff source. Until built, expect to adjudicate shared-cage verifies.
+
+62. **glm HTTP-400 root cause — SOLVED 2026-07-26 (plan-005 E5 forensics): it IS the bare-token
+    bug (spec 10 FR-R15)** — all 24 archived 400s carry `"model":"glm[1m]"` (bare lane token as
+    model id); Z.ai answers code 1211 Unknown Model, deterministically, at healthy quota
+    (pro, 5h 39% / weekly 42%). Same defect on kimi = Moonshot 404 `model_not_found` (the
+    archived gtm-studio feedback mis-attributed 1211 to Moonshot — reversed); bare `default` on
+    glm = Z.ai 500, which is why the fleet count looked mixed. `<synthetic>` zero-token rows are
+    the CLI's own error envelope (symptom marker, not lane behavior). FIX SITE (better than
+    lane_cmd): `_try_claim_one` swarm-run.sh:476 `lane="$(_call_lane_token "$lane")"` — one
+    line, also fixes `_claim_meta`'s colon-requiring claim-filename regex (bare-token claims
+    return lane="" and blind the reap/liveness guards). Wave 1 implements; FR-R15 wording
+    updated alongside. Consequence: glm's ~44% retry rate was substantially self-inflicted —
+    re-judge glm reliability after the fix before any lane-table demotion.
+
+63. **Retroactive judged-coverage is unachievable on moved trees (plan-005 O1, 2026-07-26)** —
+    verify waves over 36 historical done cards (gtm-runq/gtm-e/fleetops016, all ≤1 day old)
+    returned 36/36 raw-refuted on pure tree drift (build artifacts like tsconfig.tsbuildinfo,
+    wholesale later edits); zero valid verdicts writable. parity012 lesson (e) at full scale.
+    Consequence: claude/kimi judged-coverage (7.5%/0%) can only be lifted AT RUN CLOSE while the
+    card's diff basis still exists — candidate FR: auto-verify wave at run close (opt-out), which
+    spec 14 FR-8's per-card write-journal would make diff-precise even on shared cages.

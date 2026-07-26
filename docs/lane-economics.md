@@ -108,26 +108,46 @@ shared-prefix cards with that in mind if that lane is carrying real volume.
 
 No silent spend: every manual, offline, or spawned-agent run gets one row, and the wording of the
 dollar figure in that row must match the billing shape it came from, not be flattened to a single
-generic "$X spent." Three wordings, never interchanged:
+generic "$X spent."
 
-- **Real dollars** — the figure is recomputed from actual usage against a provider's list price
-  and is a genuine invoice line item (the kimi lane, end to end).
-- **Notional pool dollars** — the figure is a cost-equivalent estimate against a shared
-  subscription pool, not a bill (the grok lane; occasionally others when a provider's own envelope
-  supplies an estimate against a flat-fee plan).
-- **Prompts consumed** — there is no dollar figure at all because the plan doesn't meter in
-  dollars; report the metering unit the plan actually uses (the glm lane).
+**Dollars-as-proxy (operator directive 2026-07-26): every priceable lane now carries a USD figure,
+subscription and quota lanes included.** The flat fee is still paid, and a dollar figure at the
+provider's OWN list price is the one cross-lane unit that makes pool draw comparable. The figure's
+*meaning* still differs by billing shape, so every speedwars row carries a `cost_basis` tag
+(spec 08, 2026-07-26 amendment) and ledger rows keep the wording split:
+
+- **Real dollars** (`recomputed-list` on a PAYG lane) — recomputed from actual usage against the
+  provider's list price; a genuine invoice line item (the kimi lane, end to end).
+- **Notional list dollars** (`recomputed-list` on a subscription/quota lane) — same recompute, but
+  the figure is a proxy for pool/quota draw, not a bill (glm at Z.ai API list, codex at
+  gpt-5-codex list). For glm this REPLACES the old "prompts consumed, no dollar figure" wording:
+  keep reporting prompts consumed where the plan meters them, but the row also carries the
+  notional dollars. Never take glm's envelope cost field — it is claude-priced against a swapped
+  base URL (wrong provider) and is always recomputed.
+- **Notional pool dollars** (`envelope-pool`) — the provider's own cost-equivalent estimate
+  against a shared subscription pool (the grok lane; recomputed at xAI list when the envelope
+  omits it).
+- **Envelope list dollars** (`envelope-list`) — the envelope figure is accurate at the provider's
+  list price (the claude lane; a subscription session makes it notional-against-pool in effect).
+- **Unpriced** (`unpriced-tier-unknown`) — gemini only, until the key's tier (free vs paid) is
+  recorded per run; fabricating a nonzero figure for a possibly-free-tier key would mislead.
 
 Absence of a cost field is never evidence of zero cost — it usually means the metering happens
 somewhere the log can't see (a provider dashboard, a pool balance), not that the call was free.
+
+**Orchestrator sessions** (the Claude Code session driving a run) are the one consumer no envelope
+covers. `ccusage` cannot attribute per run (its session JSON carries no project/run key —
+verified 2026-07-26), so the honest granularity is per-day: add a manual "Orchestrator cost (day,
+ccusage)" row to the ledger from `ccusage claude daily --since <date> --until <date> --json`,
+flagged approximate and "mixed, not attributable" on any day with concurrent unrelated work.
 
 ## Decision table
 
 | Lane | Recommended auth today | Ledger wording | Rate-limit park TTL class |
 |------|------------------------|-----------------|----------------------------|
-| Anthropic (claude) | Subscription for steady orchestrator/exec load; API key for burst overflow | Real dollars (envelope is accurate) | No dedicated failover arm today — falls through to bounded retry, never parks |
-| Z.ai (glm) | Subscription — dominant, cap concurrency instead of fanning wide | Prompts consumed | Long (subscription window) |
-| SuperGrok (grok) | Subscription while pool is funded; PAYG key as post-subscription fallback | Notional pool dollars | Long (weekly pool), short once on PAYG |
-| OpenAI (codex) | Subscription; check provider dashboard for real spend | No cost field — tokens only, dashboard is source of truth | Long (subscription window), 2-strike before flip |
-| Gemini | API key; confirm free vs. paid tier before assuming zero cost | No cost field — track tier separately | No dedicated failover arm today — falls through to bounded retry, never parks |
+| Anthropic (claude) | Subscription for steady orchestrator/exec load; API key for burst overflow | Envelope list dollars (accurate; notional against the subscription pool) | Dedicated failover arm (spec 10 FR-R8, `limit_error()` in src/swarm-lib.sh) |
+| Z.ai (glm) | Subscription — dominant, cap concurrency instead of fanning wide | Prompts consumed + notional list dollars recomputed at Z.ai API list (envelope figure is wrong-provider, never used) | Long (subscription window) |
+| SuperGrok (grok) | Subscription while pool is funded; PAYG key as post-subscription fallback | Notional pool dollars (envelope), recomputed at xAI list when absent | Long (weekly pool), short once on PAYG |
+| OpenAI (codex) | Subscription; check provider dashboard for real spend | Notional list dollars recomputed at gpt-5-codex list (fresh input = input − cached); dashboard remains source of truth for real spend | Long (subscription window), 2-strike before flip |
+| Gemini | API key; confirm free vs. paid tier before assuming zero cost | Unpriced until the key's tier is recorded per run | Dedicated failover arm (spec 10 FR-R8, `limit_error()` in src/swarm-lib.sh) |
 | Moonshot (kimi) | PAYG only — subscription variant wrong shape for fan-outs, and paused anyway | Real dollars (recomputed at provider list price, never the envelope's own figure) | Short (per-minute RPM windows); long only on a quota/balance signal |
