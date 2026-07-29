@@ -1,6 +1,6 @@
 ---
 name: unimatrix
-version: 1.3.0
+version: 1.4.0
 description: Plan AND operate unimatrix swarm runs — decomposition, lane assignment, bus setup, gates, monitoring, troubleshooting, evidence, and the cross-repo feedback drop-box. Use when Fable is about to orchestrate work through the unimatrix file-bus (/swarm, /swarm-loop, swarm-run.sh, write-capable lanes, cross-model review), when the user says "use unimatrix", "swarm this", "plan the swarm", "check the swarm", when operating or debugging a live run, or when any agent in any repo wants to send unimatrix feedback. Self-improving — append lessons after every run.
 ---
 
@@ -39,6 +39,8 @@ Operating/debugging a live run: jump to §6. Sending feedback from another repo:
   "probably won't collide"). Two cards touching one file = one card or two waves.
 - **Split any card you'd estimate >600s** of worker wall-clock (aiact-054: two C4 cards
   became the critical path; one was watchdog-killed mid-answer with the work complete).
+- Complex PAGE cards (multi-component adoption + new laws) are L cards: 2400s, not 1800s
+  (gtm-owners3 g7 finished at 1791s of an 1800s cap).
 - Waves are dependency barriers ONLY. A "conceptual phase" is not a barrier. Cheap
   critics/tests between waves are the orchestrator's job, not extra cards.
 - Spike-first: any load-bearing unverified assumption (cost fields, id joins, timing)
@@ -48,16 +50,19 @@ Operating/debugging a live run: jump to §6. Sending feedback from another repo:
 
 ## 2. Assign lanes
 
-| Task smell | Lane | Why |
+| Task smell | Lane | Why + evidence (speedwars through 2026-07-28, done-only medians) |
 |---|---|---|
 | Needs on-box private data (transcripts, credentials, browser, repos/ clones) | claude session agents / Fable | data never leaves the box |
-| Pure-function code from a tight spec | glm write lane | cheap, good at contained TDD |
-| Self-contained UI/render/CLI code | grok write lane (**C1 CODE cards only** — C2+ code, prose, and meta cards pin claude:sonnet; grok's false-done class covers prose AND code cards, 2026-07-26) or glm | speed |
-| Review / audit / adversarial verify | codex (REVIEW default) + the lanes that did NOT write the card | judge ≠ executor, always |
-| (kimi = CLASS_REVIEW failover seat) | unexercised as of 2026-07-26 — 0 review cards ever served; its first real exercise will be a codex outage, so treat its review quality as unproven until then | dated observation |
-| Web research | gemini (read-only; docker sandbox if unattended) | its niche |
-| Highest-wreckage-risk core (process lifecycle, orchestration) | strongest claude tier in session | blast radius |
-| Cheapest-capable exec (pick the cheapest model you are ≥90% confident lands the card) | claude haiku→sonnet→opus ladder (EXEC_CHAIN rung order) | escalate only on execution feedback |
+| Highest-wreckage-risk core (process lifecycle, orchestration) | strongest claude tier in session | blast radius; claude is the dollar-heavy lane (median done 265s) — spend it where wreckage risk pays |
+| Cheapest-capable exec | claude haiku-to-sonnet-to-opus ladder (EXEC_CHAIN rung order) | escalate on execution feedback only; haiku-as-prose-default stays GATED on backlog 65 (6 of the 20-30 verified-clean cards) — do not flip yet |
+| Pure-function code from a tight spec / contained TDD | glm write lane | cheap; honest-slow (median 401s — fails by timeout, never by narration); single-digit in-flight ceiling — cap concurrency, don't fan wide; ~44% retry rate partly self-inflicted pre-bare-token-fix — re-judge before any demotion (backlog 62) |
+| Self-contained UI/render/CLI code, C1 ONLY | grok write lane | fastest honest C1 lane (median done 97s; the all-rows median of 35s IS the false-done tell). C2+/prose/meta pin claude:sonnet. Shared cage requires a .files manifest (engine-enforced since 2026-07-29); no manifest means own cage. False-done class recurring since 2026-07-19 — the manifest gate is what un-benches it, not trust |
+| Review / audit / adversarial verify | codex (REVIEW default) + lanes that did NOT write the card | judge is never the executor; best done-rate (86%), median 68s, near-free; honest-refusal false-done class still open (backlog 68) |
+| Multi-file C2/C3 across many files, 1M context | kimi | REAL PAYG dollars; **lane DEAD since 2026-07-26 (Moonshot balance zero)** — plan zero kimi cards until topped up; also the CLASS_REVIEW failover seat (0 review cards ever served — quality unproven) |
+| Web research | gemini (read-only; docker sandbox if unattended) | its only niche — 19% done-rate, unpriced tier; never on the critical path |
+
+Live numbers: `swarm-ctl report`. Auth/billing per lane: `docs/lane-economics.md` decision table.
+Recalibrate this table from speedwars rows, never on vibes.
 
 **Routing rules (spec 10 FR-R14):**
 - The C1-C4 complexity label is **pre-generation routing** — assign the lane at plan time; never
@@ -86,11 +91,14 @@ Operating/debugging a live run: jump to §6. Sending feedback from another repo:
 ## 3. Bus + env hygiene
 
 - **Per-run bus namespace**: `./swarm-run.sh --run <label>` (spec 20, since 2026-07-26) derives
-  `BUSDIR=.bus-<label>` + `SPEEDWARS_RUN=<label>` atomically — prefer it over hand-set env pairs
-  (they drift; that drift was backlog 21). ext4 only, never /mnt/*. A bus with a LIVE heartbeat
-  refuses a second run — that refusal is the collision guard working, not a bug; loop children
-  bypass via `UNIMATRIX_BUS_OWNER=1` (already wired). Two runs on one bus = renumber collisions,
-  verify noise, cleanup cards (aiact-054 + brain-053 both paid this tax).
+  `BUSDIR=.bus-<label>` + `SPEEDWARS_RUN=<label>` atomically from the **caller's cwd** (spec 20
+  amendment, 2026-07-29) — launch it from the target repo, not from unimatrix. Prefer it over
+  hand-set env pairs (they drift; that drift was backlog 21). ext4 only, never /mnt/*. A bus with
+  a LIVE heartbeat refuses a second run — that refusal is the collision guard working, not a bug;
+  loop children bypass via `UNIMATRIX_BUS_OWNER=1` (already wired). A run whose bus has zero
+  queued/claimed/done cards now aborts loudly ("nothing to run") instead of closing clean. Two
+  runs on one bus = renumber collisions, verify noise, cleanup cards (aiact-054 + brain-053 both
+  paid this tax).
 - Env per run: `FANOUT` (≥6 once bus is namespaced), `WORKER_TIMEOUT_SEC` ≥900 for
   write/TDD cards (600 killed real work), `MON_AUTOOPEN=0` when unattended.
 - Write cards: `<id>.write` sidecar = target dir. Before parking a timed-out write
@@ -132,12 +140,15 @@ Everything below runs from the unimatrix repo (`~/code/unimatrix`). Deep semanti
 in `specs/` (01 core, 03 loop, 04 settings, 10 role classes, 11 succession) and
 `rules/unimatrix/` — this section is the cheat-sheet, not the contract.
 
+Hand-seeded specs/? Run `swarm-ctl lint-specs` first — read-only preflight; catches empty
+sidecars, missing write targets, bad lane tokens before any spawn.
+
 ### Run
 
 ```bash
 # One-shot swarm (Fable pre-seeds specs/, or pass a question for the generate wave):
-BUSDIR=$PWD/.bus-<label> FANOUT=8 WORKER_TIMEOUT_SEC=1200 LEDGER_AUTO=1 MON_AUTOOPEN=0 \
-  SPEEDWARS_RUN=<label> ./swarm-run.sh ""          # "" = drain pre-seeded specs only
+cd <target-repo> && FANOUT=8 WORKER_TIMEOUT_SEC=1200 LEDGER_AUTO=1 MON_AUTOOPEN=0 \
+  ~/code/unimatrix/swarm-run.sh --run <label> ""   # "" = drain pre-seeded specs only
 ./swarm-run.sh --plan-only "<question>"             # plan, don't spawn
 ./swarm-run.sh verify                               # cross-model verify wave over done/ (idempotent)
 ./swarm-run.sh config [<key> [<value>]]             # print/edit swarm.conf
@@ -631,3 +642,27 @@ Standing rules:
   in-flight output) — worked; but pin the CSS/JSX seam too (facts interpunct: css expected item-spans, tsx emitted separator-spans;
   only codex caught it). (f) Screenshot judges need the SCOPE ruling in the prompt (pass-A vs pass-B) or half the findings
   adjudicate out-of-scope — 12 of 26 design-judge findings were ratified-deferred plant work.
+- **2026-07-26 plan005 w1-8 (engine fix wave, Fable-direct):** (a) Verify-the-envelope-first
+  (spec 08 2026-07-26b) closed a whole wave for $0 — the archive sweep proved the claude-CLI
+  envelope has NO reasoning-token key, vacating a MUST before any jq was written; spike the
+  evidence before speccing extraction FRs. (b) Two real races fell out of one bats fixture, not
+  review: the fake's non-atomic once-marker (both concurrent workers took the once-mode) and
+  _cage_is_shared missing finished siblings (fast writer re-opened the exact W3D1 window) —
+  concurrency fixtures earn their keep; make every test-fixture claim atomic (mkdir) from the
+  start. (c) A collision gate specced as "any live heartbeat refuses" deadlocks the loop that
+  maintains that heartbeat for its own children — when a spec adds a refusal, enumerate every
+  legitimate self-invocation path (loop iterations, orchestrator verify) BEFORE Active, not at
+  implementation. (d) Live-engine waves stay Fable-direct with a full-suite gate per wave
+  (~15 min each; 870→897 green) — same-file rule made them sequential and the suite caught zero
+  regressions across 6 engine waves. (e) Publishing hit an undocumented flow: release/main is a
+  curated public-release lineage, not local public — a checklist that names a command nobody has
+  run since a history rewrite is a trap; re-derive and document at the next use (done in
+  docs/releasing.md).
+- **2026-07-28 gtm-owners3 (gtm-studio):** (a) grok formally benched on shared cages — 4/6 C1 code cards false-doned with zero Write/Edit stream records DESPITE full lane discipline (preamble, pin, C1-only); re-entry gated on the stream-edit-count finalize gate (feedback filed). (b) A CONCURRENT operator fleet on the same checkout was the tail's dominant cost (~45-60 min cold-window waits, double-applied findings, one index-race commit) — worktrees-per-fleet should be the default posture, shared checkout the exception. (c) Session-seat panels: pin "SendMessage to main IS the delivery" and sweep idle seats in batch — per-seat nudges cost a round-trip each; seats must NOT each run repo-wide gates (orchestrator owns two per wave). (d) Review-panel ROI held: 39 findings, 3 production CRITs (unwired ports class — a compose-time presence test would have caught it earlier); the design-judge seat (ui-ux-pro-max vs a pinned wave-0 brief + real screenshots) found the CRIT nobody else could see — make it a standing seat for UI waves. (e) Vendor-infra sizing is a card-brief fact: Supabase session pooler (pool_size 15) killed a 24-wide live run; ≤12 fits.
+- **2026-07-29 v1.4.0 fix wave (this repo):** stream-edit-count finalize gate for grok REFUTED by
+  bus evidence — grok streams carry zero tool_use records even on HONEST write cards (gtm-owners3
+  t6/t8), so a stream gate cannot discriminate; shipped instead: non-journal lanes (grok/codex/
+  gemini) on a shared cage now REQUIRE a .files manifest at the diff gate. Also shipped: sweep-time
+  empty-sidecar refusal + write-target-empty instant park (no 120s wait), swarm-ctl lint-specs
+  preflight, empty-run loud abort, --run now derives at the caller's cwd (spec 20 amendment). Kimi
+  stays dead until Moonshot top-up (operator action).

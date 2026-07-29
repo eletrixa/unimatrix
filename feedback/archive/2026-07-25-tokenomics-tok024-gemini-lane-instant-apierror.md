@@ -4,6 +4,7 @@ date: 2026-07-25
 run: tok024
 type: bug
 severity: major
+triaged-to: backlog#75 (trust-workspace theory refuted 2026-07-29 — var is hardcoded per spawn; instant-API-error root cause tracked in 75)
 ---
 
 # Gemini lane dies instantly with "[API Error: An unknown error occurred.]" — 0 tokens, <1s

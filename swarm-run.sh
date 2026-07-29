@@ -106,6 +106,10 @@ _abspath() {
 # BUSDIR default below so the derivation slots into the same precedence line: explicit env >
 # --run derivation > baked .bus default (spec 04 doctrine — an operator's BUSDIR env always wins).
 # The label is path-material — anything outside [A-Za-z0-9._-] is refused at parse time.
+# spec 20 FR-1 amendment (2026-07-29, maintainer-approved): derives against the CALLER's cwd, not
+# SCRIPT_DIR — a --run invocation may be issued from any repo, and its bus belongs where the
+# operator stands (same doctrine as `call`'s busdir, see cmd_call FR-1 comment). Launch --run from
+# the target repo; a mismatch is caught by the empty-run abort below (_refuse_empty_run).
 # UNIMATRIX_BUS_ROOT is a TEST seam only (bats must not create .bus-* inside the real checkout);
 # operators never set it.
 RUN_LABEL=""
@@ -122,7 +126,7 @@ fi
 # inside the unimatrix checkout), never an explicit operator/test override.
 _BUSDIR_FROM_ENV="${BUSDIR:+1}"
 if [[ -z "${BUSDIR:-}" && -n "$RUN_LABEL" ]]; then
-  BUSDIR="${UNIMATRIX_BUS_ROOT:-$SCRIPT_DIR}/.bus-$RUN_LABEL"
+  BUSDIR="${UNIMATRIX_BUS_ROOT:-$PWD}/.bus-$RUN_LABEL"
 fi
 BUSDIR="$(_abspath "${BUSDIR:-$SCRIPT_DIR/.bus}")"
 if [[ -n "$RUN_LABEL" && -z "${SPEEDWARS_RUN:-}" ]]; then
@@ -295,8 +299,9 @@ _orig_chain_bare() {
 # plausibly make this card work again with nothing outside the bus changing. Fixed per the token
 # (spec text, not a bash heuristic): retryable=1 for rate-limit, session-limit, timeout-watchdog,
 # chain-exhausted, pinned-lane-blocked, api-error, server-error, no-answer, false-done; everything
-# else (auth-death, spawn-fail, cage-denied, write-target-missing, parked-env, lane-down, and any
-# token outside this list) is retryable=0.
+# else (auth-death, spawn-fail, cage-denied, write-target-missing, write-target-empty (2026-07-29 —
+# an empty .write sidecar, never legitimate), parked-env, lane-down, and any token outside this
+# list) is retryable=0.
 _reason_retryable() {
   case "$1" in
     rate-limit | session-limit | timeout-watchdog | chain-exhausted | pinned-lane-blocked \
@@ -374,6 +379,15 @@ _try_claim_one() {
     # itself, independent of which lane would have served it.
     if [[ -e "$BUSDIR/queue/$id.write" ]]; then
       local wtarget wcanon; wtarget="$(<"$BUSDIR/queue/$id.write")"
+      # empty-card refusal (2026-07-29): an EMPTY .write is never legitimate — unlike a
+      # not-yet-existing target (the bounded wait below), there is no future poll that fixes a
+      # sidecar with no path in it at all. Instant park, no bounded wait.
+      if [[ -z "${wtarget//[[:space:]]/}" ]]; then
+        echo "swarm-run: $id refused — queue/$id.write is EMPTY (never legitimate, unlike a not-yet-existing target); parking" >&2
+        local orig_bare; orig_bare="$(_orig_chain_bare "$BUSDIR" "$id")"
+        _park_card "$id" "$orig_bare" 0 write-target-missing write-target-empty
+        continue
+      fi
       # backlog-29 symlink hardening: match BOTH spellings — raw catches not-yet-existing paths,
       # realpath resolves symlinks/.. (a link to .claude/ must not slip past the literal regex).
       wcanon="$(realpath -m -- "$wtarget" 2>/dev/null || printf '%s' "$wtarget")"
@@ -699,10 +713,11 @@ _grok_token_sync() {
 # stream), so a narration-only card can no longer be blessed on a sibling's bytes (the W3D1
 # shape). Journal paths that no longer exist contribute nothing — a Write record must not credit
 # a file the same stream later rm'd (the 2026-07-25 salvage-doctrine lesson, applied to the gate).
-# ponytail: REMAINING CEILING — grok/codex/gemini streams carry no tool_use records, so shared
-# cages there stay cage-granular; sharing is detected via live queue/*.write sidecars, so a
-# sibling that already finalized is invisible (the whole-cage sweep then still applies, which is
-# also what the pre-FR-8 behavior was). Upgrade path for both: a manifest.
+# ponytail: REMAINING CEILING (2026-07-29) — a shared cage on a non-journal lane now REJECTS
+# (below) instead of silently blessing sibling bytes; the reject is deterministic per attempt, so
+# it burns MAX_LANE_RETRIES same-lane serves before the chain advances rather than failing fast.
+# Upgrade path: a claim-time pre-check that refuses the shared-cage-no-manifest shape before
+# spawning at all, instead of paying for a spawn per retry to discover it again.
 _write_target_changed() {
   local id="$1" jlane="${2:-}" wtarget stamp_epoch
   wtarget="$(<"$BUSDIR/queue/$id.write")"
@@ -735,6 +750,13 @@ _write_target_changed() {
       return 1
     fi
     roots=("${jroots[@]}")
+  elif _cage_is_shared "$id" "$wtarget"; then
+    # jlane is a non-journal lane here (grok/codex/gemini streams carry no tool_use records —
+    # verified empirically 2026-07-28, honest cards included) — with a shared cage a sibling's
+    # bytes would bless a narration-only "done". No journal to scope by, so the FR-2 manifest
+    # is REQUIRED. Fails closed for any future lane token.
+    echo "swarm-run: $id shares its write cage on lane '$jlane' (no tool-use journal on this lane) and has no queue/$id.files manifest — sibling bytes cannot prove this card wrote; publish a .files manifest (swarm-ctl add --files) or give the card its own cage" >&2
+    return 1
   fi
   # A listed path the worker never created simply doesn't exist; find's complaint goes to the
   # already-suppressed stderr and it contributes no match — exactly right, an undelivered
@@ -1364,6 +1386,19 @@ _enqueue_pending_specs() {
       continue
     fi
 
+    # empty-card refusal (2026-07-29): direct specs/ seeding bypasses swarm-ctl add validation,
+    # and an existing-but-whitespace-only card file is never legitimate (gtm-owners3: an empty
+    # .write ate the full FR-5 bounded wait, then parked non-retryable). Refuse in place — all
+    # of the card's files stay in specs/ for the operator to fix; the sweep continues.
+    local sc card_empty=0
+    for sc in prompt lane write chain files; do
+      if [[ -e "$BUSDIR/specs/$id.$sc" ]] && ! grep -q '[^[:space:]]' "$BUSDIR/specs/$id.$sc"; then
+        echo "swarm-run: $id refused at sweep — specs/$id.$sc is empty; fix or remove it (card left in specs/)" >&2
+        card_empty=1
+      fi
+    done
+    (( card_empty )) && continue
+
     [[ -e "$BUSDIR/specs/$id.lane" ]] && mv "$BUSDIR/specs/$id.lane" "$BUSDIR/queue/$id.lane"
     [[ -e "$BUSDIR/specs/$id.write" ]] && mv "$BUSDIR/specs/$id.write" "$BUSDIR/queue/$id.write"
     [[ -e "$BUSDIR/specs/$id.chain" ]] && mv "$BUSDIR/specs/$id.chain" "$BUSDIR/queue/$id.chain"
@@ -1379,6 +1414,20 @@ _enqueue_pending_specs() {
   # context) is NOT exempt — a plain function call returning nonzero trips errexit same as any
   # other command. (Same failure class as docs/02-build-pitfalls.md #18, one layer up: extraction
   # into a function changes what's "the last command" for errexit purposes.)
+  return 0
+}
+
+# _refuse_empty_run — spec 20 amendment 2026-07-29: a bus with zero queued/claimed/done cards
+# after enqueue is a mis-derivation or mis-seeding trap (gtm-owners3: --run from another repo
+# swept an empty specs/ and closed clean) — never intent. Fail loud instead of blessing it.
+_refuse_empty_run() {
+  local done_n total_n
+  read -r done_n total_n <<<"$(gate_count "$BUSDIR")"
+  if (( total_n == 0 )); then
+    echo "swarm-run: nothing to run — $BUSDIR has no queued, claimed, or done cards; aborting" >&2
+    echo "swarm-run: note --run <label> derives BUSDIR at the caller's cwd — launch from the target repo, seed specs/ into this bus first, or set BUSDIR explicitly" >&2
+    return 1
+  fi
   return 0
 }
 
@@ -1507,6 +1556,7 @@ full_run() {
 
   # "starts at enqueue" (specs/01 FR-1): anything Fable wrote to specs/ moves to queue/ now.
   _enqueue_pending_specs
+  _refuse_empty_run || return 1
   _drive_pool
 
   echo "=== results ==="
@@ -1545,6 +1595,7 @@ verify_run() {
   done
 
   _enqueue_pending_specs
+  _refuse_empty_run || return 1
   _drive_pool
 
   echo "=== verify results ==="

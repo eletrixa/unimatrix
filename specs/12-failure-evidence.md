@@ -67,9 +67,10 @@ Fixed set; every value maps 1:1 to a signal the code already detects:
 **Extended 2026-07-25 by [spec 14](./14-write-cage-attribution.md):** `cage-denied` (FR-1) and
 `write-target-missing` (FR-5) join this table — see spec 14 for their detection and sites, which are
 specified there rather than duplicated here. Spec 14 FR-7 additionally reuses this vocabulary as the
-**reason-token** set for `limits/` markers, adding three marker-only tokens (`chain-exhausted`,
-`pinned-lane-blocked`, `session-limit`) that describe a marker but do not change any row's
-`class`. There is one taxonomy; markers and speedwars rows draw from it.
+**reason-token** set for `limits/` markers, adding four marker-only tokens (`chain-exhausted`,
+`pinned-lane-blocked`, `session-limit`, and `write-target-empty` added 2026-07-29 via spec 14 FR-5
+amendment) that describe a marker but do not change any row's `class`. There is one taxonomy; markers
+and speedwars rows draw from it.
 
 Every **park** is terminal for the gate, so it also emits a final `outcome:"parked"` row
 carrying the class that caused it (round-4 MAJ: several pinned park paths previously wrote only

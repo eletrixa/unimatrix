@@ -1422,3 +1422,77 @@ EOF
   [ ! -e "$BUS/limits/u7.parked" ]
   [ ! -e "$BUS/limits/.chain-u7" ]
 }
+
+# --- spec 01 (2026-07-29 amendment, backlog 73): lint-specs read-only preflight -------------
+
+@test "lint-specs: clean bus — OK line for a card with prompt + .lane kimi:kimi-k3 + valid .write + valid .files" {
+  mkdir -p "$BATS_TEST_TMPDIR/writedir"
+  echo "do the thing" > "$BUS/queue/l1.prompt"
+  printf 'kimi:kimi-k3' > "$BUS/queue/l1.lane"
+  printf '%s' "$BATS_TEST_TMPDIR/writedir" > "$BUS/queue/l1.write"
+  echo "out.txt" > "$BUS/queue/l1.files"
+  BUSDIR="$BUS" run "$CTL" lint-specs "$BUS"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK   queue/l1"* ]]
+}
+
+@test "lint-specs: empty .write / missing .write target / empty prompt each FAIL naming the id, rc 1" {
+  echo "task" > "$BUS/queue/e1.prompt"
+  : > "$BUS/queue/e1.write"
+
+  echo "task" > "$BUS/queue/e2.prompt"
+  printf '%s' "$BATS_TEST_TMPDIR/no-such-dir" > "$BUS/queue/e2.write"
+
+  printf '   \n' > "$BUS/queue/e3.prompt"
+
+  BUSDIR="$BUS" run "$CTL" lint-specs "$BUS"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"FAIL queue/e1"*"empty .write"* ]]
+  [[ "$output" == *"FAIL queue/e2"*".write target '$BATS_TEST_TMPDIR/no-such-dir' missing"* ]]
+  [[ "$output" == *"FAIL queue/e3"*"empty prompt"* ]]
+}
+
+@test "lint-specs: unknown lane in .lane and bad token in .chain FAIL; bare 'kimi' .lane PASSES" {
+  echo "task" > "$BUS/queue/b1.prompt"
+  printf 'not-a-lane' > "$BUS/queue/b1.lane"
+
+  echo "task" > "$BUS/queue/b2.prompt"
+  printf 'codex nope' > "$BUS/queue/b2.chain"
+
+  echo "task" > "$BUS/queue/b3.prompt"
+  printf 'kimi' > "$BUS/queue/b3.lane"
+
+  BUSDIR="$BUS" run "$CTL" lint-specs "$BUS"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"FAIL queue/b1"* ]]
+  [[ "$output" == *"FAIL queue/b2"* ]]
+  [[ "$output" == *"OK   queue/b3"* ]]
+}
+
+@test "lint-specs: an escaping .files entry (../../x) FAILs via the shared validator" {
+  mkdir -p "$BATS_TEST_TMPDIR/wt"
+  echo "task" > "$BUS/queue/f1.prompt"
+  printf '%s' "$BATS_TEST_TMPDIR/wt" > "$BUS/queue/f1.write"
+  echo "../../x" > "$BUS/queue/f1.files"
+  BUSDIR="$BUS" run "$CTL" lint-specs "$BUS"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"FAIL queue/f1"* ]]
+  [[ "$output" == *"escapes the write target"* ]]
+}
+
+@test "lint-specs: mutates nothing — after a FAILing lint, seeded specs/ files are byte-identical and still in place" {
+  echo "task" > "$BUS/specs/m1.prompt"
+  : > "$BUS/specs/m1.write"   # empty .write -> guaranteed FAIL
+
+  local before="$BATS_TEST_TMPDIR/before.tree" after="$BATS_TEST_TMPDIR/after.tree"
+  find "$BUS" -exec stat -c '%n %Y %i %s' {} \; | sort > "$before"
+
+  BUSDIR="$BUS" run "$CTL" lint-specs "$BUS"
+  [ "$status" -eq 1 ]
+
+  find "$BUS" -exec stat -c '%n %Y %i %s' {} \; | sort > "$after"
+  run diff "$before" "$after"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/specs/m1.prompt" ]
+  [ -f "$BUS/specs/m1.write" ]
+}

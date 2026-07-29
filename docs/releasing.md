@@ -44,11 +44,23 @@ implements.
   project existed in its current form — `AGENTS.md` §Agent rules: never commit to it, ever, and this
   checklist never pushes to it either).
 - **`release`** → `https://github.com/<owner>/unimatrix.git`, the actual public-facing repo. It has
-  exactly **one** branch, and it is named **`main`** — not `public`. A push there therefore always
-  needs an explicit refspec: `git push release public:main` (local `public` branch → remote `main`
-  branch). `release/main` only ever advances at a release cut, as a **fast-forward** from the
-  previous release — never from `origin`'s frozen `main`, and never a force-push as part of the
-  normal flow.
+  exactly **one** branch, and it is named **`main`** — not `public`. Since the 2026-07-26 repo
+  recreation (`docs/ops/history-rewrites.md`), `release/main` carries a **curated lineage that is
+  NOT the local `public` history**: the local branch `public-release` (b788dd0 "initial public
+  release" → one commit per release). Publishing therefore is NEVER `git push release public:main`
+  (that can no longer fast-forward, and `--follow-tags` there would drag the whole private history
+  into the public repo). Instead, graft the release's TREE onto the curated lineage and push that:
+
+  ```bash
+  tree=$(git rev-parse vX.Y.Z^{tree})
+  new=$(git commit-tree "$tree" -p "$(git rev-parse public-release)" -m "release: vX.Y.Z — <headline>")
+  git update-ref refs/heads/public-release "$new"
+  git push release public-release:main        # fast-forward on the curated lineage
+  ```
+
+  `release/main` only ever advances this way at a release cut — never from `origin`'s frozen
+  `main`, never a force-push as part of the normal flow, and never with tags from the private
+  lineage.
 - **Why the remote and branch are named explicitly every time, and "push to main" is never said
   bare:** this repo alone has three different things called `main` (the local dead branch, its
   `origin` mirror, and `release`'s real live branch) plus one `public` (the local trunk and its
@@ -89,13 +101,25 @@ implements.
 
 1. `git push origin public` (private mirror — routine, always the full trunk).
 2. `git push origin vX.Y.Z`
-3. `git push release public:main` — **fast-forward only.** If this is ever rejected as
-   non-fast-forward, stop: that means `release/main` holds a commit `public` doesn't, which should
-   never happen in the normal flow. Force-pushing over it needs the maintainer's explicit say-so in
-   that conversation, never a default.
-4. `git push release vX.Y.Z:vX.Y.Z`
+3. Graft the release tree onto the curated lineage and push THAT (see "Publishing" above —
+   never `git push release public:main`; this list previously said exactly that and was the
+   stale half of the 2026-07-26 flow change):
+
+   ```bash
+   tree=$(git rev-parse vX.Y.Z^{tree})
+   new=$(git commit-tree "$tree" -p "$(git rev-parse public-release)" -m "release: vX.Y.Z — <headline>")
+   git update-ref refs/heads/public-release "$new"
+   git push release public-release:main        # fast-forward on the curated lineage
+   ```
+
+   If `public-release:main` is ever rejected as non-fast-forward, stop: `release/main` moved
+   outside this flow. Force-pushing over it needs the maintainer's explicit say-so in that
+   conversation, never a default.
+4. `git push release vX.Y.Z:vX.Y.Z` — only after the range check below has passed for the
+   commits the tag makes reachable (v1.2.0/v1.3.0 precedent: annotated release tags do live on
+   the public repo).
 5. Verify: `git ls-remote --tags release | grep vX.Y.Z` returns the tag; after a `git fetch release`,
-   `release/main` matches local `public`.
+   `release/main` matches local `public-release`.
 
 ### Before every push — checklist
 

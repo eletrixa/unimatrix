@@ -22,6 +22,11 @@ setup() {
   export CONF
   export HEARTBEAT_SEC=1
   export TARGET_DIR="$TARGET"
+  # spec 13 auto-probes are OFF here (mirrors tests/swarm-run.bats setup): this file installs no
+  # fake curl, so a first-claim live probe would hit the REAL provider API — kimi's suspended
+  # Moonshot account turned that into a box-state-dependent kimi.broken and failed the FR-R2/R3
+  # fallback tests (found 2026-07-29, latent since PROBE_AUTO shipped in v1.3.0).
+  export PROBE_AUTO=0
   export SWARM_RUN="$BATS_TEST_DIRNAME/../swarm-run.sh"
   # crontab shim (defense in depth): attended cmd_run calls watchdog-disarm on close — without a
   # shim that reads the REAL crontab. The no-op-disarm guard makes it read-only, but the suite

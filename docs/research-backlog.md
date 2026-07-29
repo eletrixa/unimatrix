@@ -21,6 +21,9 @@ Ids are permanent; 8 was never assigned.
    objective / output format / sources / negative scope before it's enqueued, not left as free
    text. Rationale: MAST found spec ambiguity responsible for 41.8% of observed multi-agent
    failures — the highest single category.
+   Update 2026-07-29: item 73's `lint-specs` preflight now covers the sidecar-shape half
+   (write targets exist, chain tokens well-formed); the prompt-field contract itself
+   (objective/output/sources/negative-scope) stays open.
 4. **Synthesis must cite dissent explicitly.** When verify-wave verdicts disagree across branches,
    today's synthesis can quietly pick a side. Force the synthesis step to name the dissenting
    branch and its claim, not just the majority read. Rationale: MAST FM-2.5 (ignored/buried minor-
@@ -502,6 +505,9 @@ diff-presence check for `.write` branches is the fix that covers both variants; 
     return lane="" and blind the reap/liveness guards). Wave 1 implements; FR-R15 wording
     updated alongside. Consequence: glm's ~44% retry rate was substantially self-inflicted —
     re-judge glm reliability after the fix before any lane-table demotion.
+    Update 2026-07-29 (run unimatrix, feedback `2026-07-26-unimatrix-unimatrix-auto-
+    timeout.md`): p53-build-drift finalized outcome=timeout on glm — one more data point for
+    the re-judge, logged here rather than as its own row.
 
 63. **Retroactive judged-coverage is unachievable on moved trees (plan-005 O1, 2026-07-26)** —
     verify waves over 36 historical done cards (gtm-runq/gtm-e/fleetops016, all ≤1 day old)
@@ -510,3 +516,93 @@ diff-presence check for `.write` branches is the fix that covers both variants; 
     Consequence: claude/kimi judged-coverage (7.5%/0%) can only be lifted AT RUN CLOSE while the
     card's diff basis still exists — candidate FR: auto-verify wave at run close (opt-out), which
     spec 14 FR-8's per-card write-journal would make diff-precise even on shared cages.
+
+64. **Reactive probe arm (spec 13 FR-6) has no deterministically reachable path (plan-005 W5,
+    2026-07-26)** — the pre-claim arm probes every lane at its first claim, and that marker
+    suppresses the reactive event for the rest of the run (criterion 2); the reactive arm only
+    fires on a resumed bus with pre-feature claims or after a health-marker-expiry edge. Watch
+    the field: if `.probed-*` markers never show "reactive" across a few weeks of runs, simplify
+    the arm out (spec amendment) — dead code in the finalize path is risk, not safety.
+
+65. **Haiku prose trial incomplete: 6 of the 20-30 verified-clean card gate (O2, plan-005 wave
+    0)** — 6/6 substantive spec cards at ~$0.11/card avg, all adjudicated clean. Next
+    improvement wave should route its prose/spec cards through `.chain claude:haiku
+    claude:sonnet` + mandatory verify to keep filling the gate; flip the prose default (skill
+    lane table + EXEC_CHAIN guidance) only once the gate count is met — never on the 6-card
+    sample (W3D1 precedent: small-sample done-rates lie).
+
+66. **Dogfood spec 20 on the next multi-wave plan (plan-005 shipped it but ran pre-flag)** —
+    next plan's swarm runs should use `--run <label>` end-to-end: exercises the collision gate,
+    the loop pass-through, and spec 20's deferred concurrent-smoke acceptance (two live labeled
+    runs, disjoint ledger rows) under real load. Also the first real-world check that
+    `UNIMATRIX_BUS_OWNER=1` never leaks into an env where it masks a genuine collision.
+    Update 2026-07-29: first field finding landed as item 72 (BUSDIR derived at the unimatrix
+    checkout instead of the caller's cwd).
+
+67. **Spec 20 FR-7 staged: Ground Control multi-bus fleet view (cockpit wave)** —
+    `site/server.mjs` is single-bus (one BUSDIR env per instance); concurrent namespaced runs
+    currently need one cockpit instance per bus (MON_PORT each). Build: enumerate live `.bus-*`
+    dirs, one fleet row per bus keyed by `_run_label`, per spec 20 FR-7. Pairs naturally with 66.
+
+68. **Codex honest-refusal false-done sniffer (carried out of 58's tail — the DONE there covers
+    only the probe half)** — codex "cannot read this file … no lasting changes" refusal text
+    finalized done/0 (run gtm-b); add the refusal class to `answer_unusable`'s signature list,
+    scoped per spec 10 §Amendment to non-salvage paths. Small, engine-side, test-first.
+
+69. **Auto-verify wave at run close (candidate FR from 63)** — judged coverage can only be
+    captured while the card's diff basis exists; spec 14 FR-8's write-journal now makes it
+    diff-precise even on shared cages. Proposal: opt-out verify wave folded into run close
+    (`swarm-run.sh verify` invoked by the orchestrator close-out, or engine-side flag), lifting
+    claude/kimi judged coverage from 7.5%/0% without retroactive noise. Also directly reduces
+    the backlog-61 adjudication tax.
+
+70. **Sweep-time empty-sidecar refusal + write-target-empty instant park (MAJOR).** Empty
+    `.write` sidecars seeded straight into `specs/` bypassed `swarm-ctl add` validation, ate the
+    full 120s FR-5 bounded wait per card at claim, then parked non-retryable — about 11 min of
+    gtm-owners3 critical path across 4 cards. **DONE** via spec 01/14 amendments 2026-07-29
+    (sweep refuses empty card files in place; empty `queue/.write` parks instantly, marker
+    token `write-target-empty`). (feedback: `2026-07-28-gtm-studio-wave-speed-
+    evidence.md`; run gtm-owners3)
+
+71. **Non-journal shared-cage manifest gate — the grok false-done closer (MAJOR).** Both 07-28
+    feedback files proposed a stream-edit-count finalize gate; REFUTED empirically — grok
+    streams carry zero tool_use records even on honest write cards (gtm-owners3 t6/t8), so a
+    stream gate cannot discriminate. Shipped instead: write cards on non-journal lanes
+    (grok/codex/gemini) with a shared cage and no `queue/<id>.files` manifest are rejected at
+    the diff gate (false-done, ordinary chain-walk). **DONE** via spec 14 FR-8 amendment
+    2026-07-29. Grok returns to shared-cage C1 WITH mandatory manifest. (feedback:
+    `2026-07-28-gtm-studio-wave-speed-evidence.md` +
+    `2026-07-28-gtm-studio-grok-lane-review.md`; run gtm-owners3)
+
+72. **`--run` BUSDIR derived at the unimatrix checkout, not the caller's cwd (MAJOR).**
+    Launching `--run` from a target repo swept an empty `specs/` and closed clean — one whole
+    gtm-owners3 launch lost. **DONE** via spec 20 amendment 2026-07-29: derivation moved to
+    the caller's cwd (matches call's convention) + empty-run loud abort in
+    `full_run`/`verify_run`. First field finding of item 66's dogfooding. (feedback:
+    `2026-07-28-gtm-studio-run-flag-busdir-cwd.md`; run gtm-owners3)
+
+73. **`swarm-ctl lint-specs` read-only preflight (MINOR).** Hand-seeded `specs/` had no
+    validation path (only `swarm-ctl add` validated). **DONE** via spec 01 amendment
+    2026-07-29. Partially addresses item 3's enqueue-time contract idea (the 4-field prompt
+    contract itself stays open). (feedback: `2026-07-28-gtm-studio-wave-speed-
+    evidence.md`)
+
+74. **Pool-exit summary never reports an orphaned `claimed/` entry (MINOR).** `c8-http` sat in
+    `claimed/` with its work already complete on disk when the wave-1 pool exited (res file
+    never written, 12MB run stream) — the close checklist listed parked/incomplete cards but
+    not the orphaned claim, so `ls claimed/` was the only tell. Add a one-line "N claims
+    released/orphaned" to `_close_out_evidence`'s checklist. (Two other points in the same
+    feedback file need no further action: the `finished: unbound variable` salvage-path crash
+    matches the `wait -n -p` guard already shipped pre-1.0 [`[[ -n "$finished" ]] || continue`,
+    swarm-run.sh:1305] and does not reproduce against current code; the grok false-done-via-
+    shared-cage data point corroborates items 45/59/71.) (feedback:
+    `2026-07-25-tokenomics-tok024-engine-bugs.md`; run tok024)
+75. **Gemini lane instant API-error root cause unknown (MAJOR, needs verification).** tok024
+    (2026-07-25): every gemini attempt died instantly ("[API Error: An unknown error occurred.]",
+    duration_ms 0, total_tokens 0) even with GEMINI_CLI_TRUST_WORKSPACE=true in the launch env.
+    Trust-workspace theory refuted 2026-07-29 (the var is hardcoded into every gemini spawn by
+    lane_cmd, src/swarm-lib.sh:1051) — the real cause (key validity / quota / model tier) was
+    never diagnosed. Ledger corroborates a sick lane: gemini 6 done / 31 attempts, 6
+    lane-unusable, unpriced tier. Next: doctor-probe the gemini lane with the current key,
+    record the key's tier per docs/lane-economics.md, then re-smoke. (feedback:
+    archive/2026-07-25-tokenomics-tok024-gemini-lane-instant-apierror.md)

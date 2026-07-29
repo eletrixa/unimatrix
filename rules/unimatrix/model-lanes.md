@@ -136,6 +136,12 @@ tried and it breaks (see below).
   If the card's write scope and sensitive data must share a parent, prefer codex — it confines
   writes to the `-C <target>` directory natively, making it the safer lane for tightly-scoped
   writes where confidentiality matters.
+  **Shared-cage detection ceiling (2026-07-29):** grok's stream carries no `tool_use` records
+  (verified across honest AND false-done cards, grok CLI 0.2.103), so the spec 14 FR-8 per-card
+  write-journal gate cannot cover this lane. The engine therefore REJECTS a grok write card whose
+  cage is shared (live sibling sidecar or finished `write-*.txt` archive) unless it carries a
+  `queue/<id>.files` manifest — plan manifests for shared-cage grok write cards, or give the card
+  its own cage.
 - `-m "$model"` is omitted when `model == default` (same convention as codex's `default`).
 - CWD for the write form rides the generic `env -C <write_target>` logic already in `envbase`
   (`src/swarm-lib.sh` ~:293) — verify it still applies before relying on it blind on this lane-add.
@@ -223,6 +229,11 @@ stall every review in the swarm rather than just its own generation work.
 - codex: native `-C <target> -s workspace-write` **only under a `.write` sidecar**; a plain card
   spawns `-s read-only` (backlog-32, 2026-07-24 — the REVIEW-default lane must never hold write
   capability against the busdir parent).
+- **Manifest requirement for non-journal lanes:** All write-capable non-journal lanes (grok/codex;
+  gemini excluded because it is not write-capable in v1) require a `queue/<id>.files` manifest when the
+  write cage is shared (live sidecar or finished archive). Codex's native `-C` confinement scopes writes
+  but does not journal them; the manifest gates false-done detection across all non-journal lanes, not
+  just grok.
 - gemini is **not** write-capable in v1 (web/research lane) — a write sidecar on a gemini branch
   is a loud refusal (`lane_cmd` returns 1), never a silent no-op.
 - `/swarm-loop` is the only caller that sets this sidecar today, always pointing at that run's

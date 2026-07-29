@@ -5,6 +5,31 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), versioned with 
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-29
+
+### What's new (for humans)
+- **Starting a swarm from the wrong folder can no longer silently do nothing**: the run now
+  lives where you launch it, and a run that finds no work refuses loudly instead of quietly
+  "finishing" an empty list.
+- **A task with a blank "where to write" note is caught the moment it's seeded** — previously
+  it burned a two-minute wait per task before failing in a way only an expert could read.
+- **Fast-but-sloppy AI lanes can't take credit for a teammate's edits anymore**: in a shared
+  folder they must name the files they will deliver up front, or work in their own folder —
+  "done" with nothing written now fails on the spot.
+- **A new one-command preflight checks every queued task card for mistakes** (blank fields,
+  missing folders, misspelled lane names) before any AI is spawned or any money is spent.
+- **The operator guide now says which AI to use for what**: an evidence-backed cheat sheet per
+  lane — real speed and reliability numbers, not vibes.
+
+### Added
+- **`swarm-ctl lint-specs [busdir]`** — read-only preflight over specs/ + queue/ cards: empty prompts/sidecars, missing write targets, invalid `.files` manifests, bad lane/chain tokens — catches seeding mistakes before any spawn.
+
+### Changed
+- **`--run <label>` now derives the bus at the caller's cwd** (`PWD/.bus-<label>`, matching the call verb) — launch from the target repo; explicit `BUSDIR` still wins (spec 20 amendment).
+- **A run whose bus holds zero queued, claimed, or done cards after enqueue now aborts loudly** instead of closing clean — the cross-repo empty-sweep trap (spec 20 amendment).
+- **Shared-cage write cards on lanes without tool-use journals** (grok/codex/gemini) are rejected at the diff gate unless they carry a `.files` manifest — closes the narration false-done class the write-journal gate cannot see on those lanes (spec 14 FR-8 amendment).
+- **The specs/ sweep refuses cards with empty prompt or sidecar files**, and an empty `.write` in queue/ parks instantly (`write-target-empty`) instead of waiting out the 120s target wait (spec 01/14 amendments).
+
 ## [1.3.0] - 2026-07-26
 
 ### What's new (for humans)

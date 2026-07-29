@@ -70,7 +70,7 @@ if [[ -n "$RUN_LABEL" && ! "$RUN_LABEL" =~ ^[A-Za-z0-9._-]+$ ]]; then
   exit 1
 fi
 if [[ -z "${BUSDIR:-}" && -n "$RUN_LABEL" ]]; then
-  BUSDIR="${UNIMATRIX_BUS_ROOT:-$SCRIPT_DIR}/.bus-$RUN_LABEL"
+  BUSDIR="${UNIMATRIX_BUS_ROOT:-$PWD}/.bus-$RUN_LABEL"
 fi
 if [[ -n "$RUN_LABEL" && -z "${SPEEDWARS_RUN:-}" ]]; then
   export SPEEDWARS_RUN="$RUN_LABEL"

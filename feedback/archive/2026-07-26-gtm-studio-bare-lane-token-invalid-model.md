@@ -4,6 +4,7 @@ date: 2026-07-26
 run: gtm-runq
 type: bug
 severity: major
+triaged-to: backlog#62
 ---
 
 Bare lane tokens in `.chain`/`.lane` sidecars resolve to INVALID model ids on kimi and codex — both fail instantly, burning all 3 MAX_LANE_RETRIES per card before failover.

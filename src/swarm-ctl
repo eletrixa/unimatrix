@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bus-only control verbs for /swarm: pause/resume/cancel/add/abort/status/kill/nudge/unpark/
-# pause-worker/resume-worker/heartbeat/watchdog-arm/watchdog-check/watchdog-disarm.
+# pause-worker/resume-worker/heartbeat/watchdog-arm/watchdog-check/watchdog-disarm/lint-specs.
 #
 # Project: unimatrix — multi-model swarm orchestrator driven from Claude Code
 # Module:  src/swarm-ctl
@@ -19,6 +19,8 @@
 # - report / postmortem / review-stub: spec 12 FR-5 read-only operator surfaces over the speedwars
 #   ledger — per-lane table, run-summary postmortem, and a mechanically-pre-filled run-reviews.md
 #   skeleton (stdout only, never writes)
+# - lint-specs: spec 01 (2026-07-29 amendment, backlog 73) read-only preflight over specs/+queue/
+#   cards and sidecars — per-card OK/FAIL, nonzero on any FAIL, writes nothing
 #
 # Design constraints:
 # - `kill <id>` reads the worker pid from .bus/pids/<id> (written by swarm-run.sh's _spawn_worker
@@ -74,6 +76,7 @@ usage: swarm-ctl <verb> [args]
   report [file]      print the speedwars per-lane table (exec src/speedwars-report.sh) (spec 12)
   postmortem [run]   pretty-print the newest run-summary row, or every row for <run> (spec 12)
   review-stub [busdir]  print a run-reviews.md skeleton, mechanical fields filled; writes nothing (spec 12)
+  lint-specs [busdir]  read-only preflight: per-card OK/FAIL over specs/ + queue/ cards + sidecars; nonzero on any FAIL
 EOF
   exit 1
 }
@@ -310,6 +313,100 @@ cmd_add() {
     cp "$files_list" "$BUSDIR/queue/$id.files"
   fi
   mv "$BUSDIR/specs/$id.prompt" "$BUSDIR/queue/$id.prompt"
+}
+
+# _lint_lane_tok_ok <token> — specs/01-swarm-core.md (2026-07-29 amendment): the six-lane roster,
+# optionally suffixed `:<model>` (model charset A-Za-z0-9._- — same as cmd_call's model_re). A BARE
+# lane token (no colon) PASSES: spec 10 FR-R15's claim-time normalization resolves it to a default
+# model before spawn, so failing a bare token here would flag config the engine happily accepts.
+_lint_lane_tok_ok() {
+  [[ "$1" =~ ^(claude|codex|gemini|glm|grok|kimi)(:[A-Za-z0-9._-]+)?$ ]]
+}
+
+# cmd_lint_specs [busdir] — specs/01-swarm-core.md (2026-07-29 amendment, backlog 73): read-only
+# preflight over every specs/*.prompt and queue/*.prompt card + its sidecars. Hand-seeded specs/
+# has no validation path today (only `add` validates on the way in) — this walks both dirs and
+# reports, per card:
+# - empty/whitespace-only prompt -> "empty prompt"
+# - .write: empty -> "empty .write"; present+non-empty but not a real directory -> ".write target
+#   '<t>' missing"
+# - .files: no USABLE .write (absent, or itself failing the .write check above) -> ".files without
+#   a usable .write"; otherwise reuses _validate_files_manifest UNCHANGED (spec 14 FR-2) against the
+#   real write target — one validator, one trust-boundary definition, never a second copy that
+#   could silently drift from cmd_add's own
+# - .lane / .chain: every token through _lint_lane_tok_ok (chain tokenized exactly like
+#   chain_current/_call_lane_token do — whitespace-split via `read -ra`, src/swarm-lib.sh:1482-1503
+#   / swarm-run.sh:2162); an empty .chain -> "empty .chain"
+# Per card: "OK   <specs|queue>/<id>" or "FAIL <specs|queue>/<id> — reason; reason". rc 1 iff any
+# card failed, else 0. MUTATES NOTHING — no rm/mv/mkdir/cp anywhere in this function or its helper;
+# reasons are joined inside a command substitution (its own subshell) so the `IFS='; '` split never
+# leaks back into this function's own IFS.
+cmd_lint_specs() {
+  local busdir="${1:-$BUSDIR}"
+  local rc=0 dirlabel dir f id
+  for dirlabel in specs queue; do
+    dir="$busdir/$dirlabel"
+    for f in "$dir"/*.prompt; do
+      [[ -e "$f" ]] || continue
+      id="$(basename "$f" .prompt)"
+      local -a reasons=()
+
+      local content; content="$(<"$f")"
+      [[ -z "${content//[[:space:]]/}" ]] && reasons+=("empty prompt")
+
+      local wfile="$dir/$id.write" wtarget="" write_ok=0
+      if [[ -f "$wfile" ]]; then
+        wtarget="$(<"$wfile")"
+        if [[ -z "${wtarget//[[:space:]]/}" ]]; then
+          reasons+=("empty .write")
+        elif [[ ! -d "$wtarget" ]]; then
+          reasons+=(".write target '$wtarget' missing")
+        else
+          write_ok=1
+        fi
+      fi
+
+      local ffile="$dir/$id.files"
+      if [[ -f "$ffile" ]]; then
+        if (( ! write_ok )); then
+          reasons+=(".files without a usable .write")
+        else
+          local ferr=""
+          ferr="$(_validate_files_manifest "$wtarget" "$ffile" 2>&1 1>/dev/null)" \
+            || reasons+=("$ferr")
+        fi
+      fi
+
+      local lfile="$dir/$id.lane"
+      if [[ -f "$lfile" ]]; then
+        local ltok; ltok="$(<"$lfile")"
+        _lint_lane_tok_ok "$ltok" || reasons+=("invalid lane token '$ltok'")
+      fi
+
+      local cfile="$dir/$id.chain"
+      if [[ -f "$cfile" ]]; then
+        local cstr; cstr="$(<"$cfile")"
+        local -a ctoks=()
+        read -ra ctoks <<<"$cstr"
+        if (( ${#ctoks[@]} == 0 )); then
+          reasons+=("empty .chain")
+        else
+          local ctok
+          for ctok in "${ctoks[@]}"; do
+            _lint_lane_tok_ok "$ctok" || { reasons+=("invalid chain token '$ctok'"); break; }
+          done
+        fi
+      fi
+
+      if (( ${#reasons[@]} == 0 )); then
+        echo "OK   $dirlabel/$id"
+      else
+        echo "FAIL $dirlabel/$id — $(IFS='; '; echo "${reasons[*]}")"
+        rc=1
+      fi
+    done
+  done
+  return "$rc"
 }
 
 cmd_abort() {
@@ -1165,5 +1262,6 @@ case "$verb" in
   report) cmd_report "$@" ;;
   postmortem) cmd_postmortem "${1:-}" ;;
   review-stub) cmd_review_stub "${1:-}" ;;
+  lint-specs) cmd_lint_specs "${1:-}" ;;
   *) usage ;;
 esac

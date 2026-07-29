@@ -309,6 +309,13 @@ if [[ -n "${FAKE_GROK_ERROR:-}" ]]; then
   printf '{"type":"error","message":"%s"}\n' "${FAKE_GROK_ERROR}"
   exit 1
 fi
+# write-mode probe (2026-07-29, mirrors fake claude's FAKE_CLAUDE_WRITE_FILE at :114-115): writes a
+# file RELATIVE to $PWD (never an absolute path baked into the knob), so a passing assertion proves
+# lane_cmd's `env -C`/CDWRAP actually chdir'd this worker into the write target. Grok's own stream
+# shape is otherwise unchanged.
+if [[ -n "${FAKE_GROK_WRITE_FILE:-}" ]]; then
+  printf '%s' "${FAKE_GROK_WRITE_CONTENT:-written}" > "$FAKE_GROK_WRITE_FILE"
+fi
 echo '{"type":"thought","data":"thinking..."}'
 content="$(printf '%s' "${FAKE_GROK_RESULT:-grok OK}" | jq -Rs .)"
 printf '{"type":"text","data":%s}\n' "$content"
@@ -414,6 +421,12 @@ _poll() {
 
 @test "P0-FR4: verify_run prints the same banner shape as full_run" {
   _write_conf "claude:opus" 4 15
+  # spec20 amendment 2026-07-29: verify_run now refuses an EMPTY bus (_refuse_empty_run) — this
+  # test only wants the banner line, so a done/ marker with no matching prompt-<id>.txt satisfies
+  # the trap (gate_count counts it) while write_verify_spec no-ops on it (missing qfile), same
+  # doctrine as "a bus resumed with only done/ entries... still closes clean" above.
+  mkdir -p "$BUS/done"
+  printf '{"id":"x","code":0,"lane":"claude"}\n' > "$BUS/done/x"
 
   local exp_root exp_branch exp_head
   exp_root="$(git -C "$BATS_TEST_DIRNAME" rev-parse --show-toplevel)"
@@ -439,6 +452,10 @@ _poll() {
 @test "F1: verify_run pins the run label too — a verify-only bus is still harvestable later" {
   _write_conf "claude:opus" 4 15
   export SPEEDWARS_RUN="wave-verify"
+  # spec20 amendment 2026-07-29: verify_run now refuses an EMPTY bus — a done/ marker with no
+  # matching prompt-<id>.txt satisfies gate_count while write_verify_spec no-ops on it.
+  mkdir -p "$BUS/done"
+  printf '{"id":"x","code":0,"lane":"claude"}\n' > "$BUS/done/x"
 
   run timeout 10 "$RUNSH" verify
   [ "$status" -eq 0 ]
@@ -948,10 +965,11 @@ EOF
 
 # --- verify wave (Phase E step 4) ------------------------------------------------------------
 
-@test "verify: with nothing done yet, verify subcommand is a harmless no-op" {
+@test "verify: with nothing done yet, verify subcommand aborts nonzero (spec20 amendment 2026-07-29: an empty bus is a trap, not a silent no-op)" {
   _write_conf "claude:opus" 4 15
   run timeout 10 "$RUNSH" verify
-  [ "$status" -eq 0 ]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nothing to run"* ]]
 }
 
 @test "verify wave: 2 branches on different lanes get verified by the VERIFY_MAP-mapped opposite lane" {
@@ -2571,7 +2589,7 @@ EOF2
   case "$token" in
     auth-death | api-error | server-error | rate-limit | timeout-watchdog | spawn-fail \
       | false-done | no-answer | lane-down | parked-env | cage-denied | write-target-missing \
-      | chain-exhausted | pinned-lane-blocked | session-limit) ;;
+      | write-target-empty | chain-exhausted | pinned-lane-blocked | session-limit) ;;
     *) echo "unknown reason token: $token" >&2; false ;;
   esac
   ! grep -q "SUPER-SECRET-CANARY-STRING" "$BUS/limits/f7b.parked"
@@ -2653,6 +2671,28 @@ EOF2
 
   wait "${BG_PIDS[0]}"
   BG_PIDS=()
+}
+
+@test "spec14 FR-5 companion (2026-07-29): an EMPTY queue/<id>.write parks INSTANTLY, never waiting PIN_WAIT_SEC" {
+  _write_conf "claude:opus" 4 15
+  cat >> "$CONF" <<'EOF2'
+PIN_WAIT_SEC=60
+EOF2
+  local argvfile="$BATS_TEST_TMPDIR/empty-write-argv"
+  _fake FAKE_CLAUDE_ARGV_FILE "$argvfile"
+  _fake FAKE_CLAUDE_RESULT "should never run"
+  # seeded directly into queue/, bypassing the sweep's own empty-card refusal (spec01 FR-B) — this
+  # test is about _try_claim_one's claim-time instant park, a distinct code path
+  mkdir -p "$BUS/queue"
+  printf '%s' "empty write card, queued directly" > "$BUS/queue/ew1.prompt"
+  : > "$BUS/queue/ew1.write"
+
+  run timeout 20 "$RUNSH"
+  [ "$status" -ne 0 ]
+  [ -f "$BUS/limits/ew1.parked" ]
+  [[ "$(<"$BUS/limits/ew1.parked")" == *"write-target-empty"* ]]
+  [ ! -e "$argvfile" ]     # the fake CLI was NEVER invoked — the 20s timeout beating PIN_WAIT_SEC=60
+                           # proves the park was instant, not a bounded wait that happened to time out
 }
 
 @test "spec14 FR-5 companion: a zero-byte run-jsonl on the exhausting attempt does NOT flag lane-down/.broken" {
@@ -2796,6 +2836,25 @@ EOF2
   [ -f "$BUS/done/foo" ]
   [ -f "$BUS/done/foo.bar" ]
   [ ! -e "$BUS/specs/foo.prompt" ]
+}
+
+@test "spec01 FR-B empty-card refusal (2026-07-29): sweep refuses an empty .write sidecar, leaves both card files in specs/, good sibling still completes" {
+  _write_conf "claude:opus" 4 15
+  _fake FAKE_CLAUDE_RESULT "good sibling answer"
+  _enqueue e1 "card whose .write sidecar is whitespace-only"
+  printf '   \n\t\n' > "$BUS/specs/e1.write"
+  _enqueue g1 "good sibling card, unaffected by e1's refusal"
+
+  run timeout 20 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/g1" ]
+  [ "$(<"$BUS/res-g1.txt")" = "good sibling answer" ]
+  # e1 stays put — both files, not swept into queue/ — for the operator to fix or remove
+  [ -f "$BUS/specs/e1.prompt" ]
+  [ -f "$BUS/specs/e1.write" ]
+  [ ! -e "$BUS/queue/e1.prompt" ]
+  [ ! -e "$BUS/queue/e1.write" ]
+  [[ "$output" == *"refused at sweep"* ]]
 }
 
 @test "spec04 FR-C: TIMEOUT_GLM overrides WORKER_TIMEOUT_SEC for the glm lane only; the claude lane keeps using the global default" {
@@ -3962,6 +4021,68 @@ CONFEOF
   [[ "$output" != *"W3D1"* ]]
 }
 
+# --- spec14 FR-8 non-journal lanes (2026-07-29): grok/codex/gemini streams carry no tool_use
+# journal at all (verified empirically 2026-07-28) — a shared cage with no queue/<id>.files
+# manifest must reject outright, never silently trust a sibling's bytes. Mirrors the claude/glm/kimi
+# journal fixtures just above, for the non-journal side of the same gate.
+
+@test "spec14 FR-8 non-journal: grok-pinned write card sharing a cage with a finished sibling and no manifest is rejected — false-done, never done" {
+  _write_conf "claude:opus" 2 15
+  cat >> "$CONF" <<'EOF2'
+MAX_LANE_RETRIES=1
+EOF2
+  local cage="$BATS_TEST_TMPDIR/grok-shared-cage"
+  mkdir -p "$cage" "$BUS"
+  # finished-sibling archive (what _archive_and_release drops at success) naming the same cage
+  printf '%s' "$cage" > "$BUS/write-sib.txt"
+  _fake FAKE_GROK_RESULT "grok really wrote it"
+  _fake FAKE_GROK_WRITE_FILE "grokmade.txt"
+  _enqueue gw1 "grok-pinned write card, shared cage, no manifest"
+  echo "grok:default" > "$BUS/specs/gw1.lane"
+  printf '%s' "$cage" > "$BUS/specs/gw1.write"
+
+  run timeout 30 "$RUNSH"
+  [ "$status" -ne 0 ]
+  [ ! -f "$BUS/done/gw1" ]
+  [ -f "$cage/grokmade.txt" ]      # grok genuinely wrote — rejected anyway, absent a manifest
+  [ -f "$BUS/limits/gw1.parked" ]
+  [[ "$output" == *"files manifest"* ]]
+}
+
+@test "spec14 FR-8 non-journal: the same shared-cage fixture with a valid .files manifest naming grok's own output lets the card finish done" {
+  _write_conf "claude:opus" 2 15
+  local cage="$BATS_TEST_TMPDIR/grok-shared-cage-ok"
+  mkdir -p "$cage" "$BUS"
+  printf '%s' "$cage" > "$BUS/write-sib.txt"
+  _fake FAKE_GROK_RESULT "grok wrote it, and this time it's provable"
+  _fake FAKE_GROK_WRITE_FILE "grokmade.txt"
+  _enqueue gw2 "grok-pinned write card, shared cage, WITH manifest"
+  echo "grok:default" > "$BUS/specs/gw2.lane"
+  printf '%s' "$cage" > "$BUS/specs/gw2.write"
+  printf 'grokmade.txt\n' > "$BUS/specs/gw2.files"
+
+  run timeout 30 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/gw2" ]
+  [ -f "$cage/grokmade.txt" ]
+}
+
+@test "spec14 FR-8 non-journal: a sole grok write card in an unshared cage finishes done with no manifest — whole-cage sweep regression guard" {
+  _write_conf "claude:opus" 2 15
+  local cage="$BATS_TEST_TMPDIR/grok-solo-cage"
+  mkdir -p "$cage"
+  _fake FAKE_GROK_RESULT "grok did the work, alone"
+  _fake FAKE_GROK_WRITE_FILE "grokmade.txt"
+  _enqueue gw3 "sole grok write card, unshared cage"
+  echo "grok:default" > "$BUS/specs/gw3.lane"
+  printf '%s' "$cage" > "$BUS/specs/gw3.write"
+
+  run timeout 30 "$RUNSH"
+  [ "$status" -eq 0 ]
+  [ -f "$BUS/done/gw3" ]
+  [ -f "$cage/grokmade.txt" ]
+}
+
 # --- spec 20 (backlog 11/21): per-run bus namespacing via --run ----------------------------------
 
 @test "spec20 FR-1: --run derives BUSDIR=.bus-<label> and the run label, atomically" {
@@ -4027,4 +4148,45 @@ CONFEOF
 @test "spec20 FR-9: usage text documents the --run flag" {
   run "$RUNSH" --plan-only
   [[ "$output" == *"--run <label>"* ]]
+}
+
+# --- spec 20 amendment 2026-07-29 (gtm-owners3): _refuse_empty_run — a bus with zero queued/
+# claimed/done cards after enqueue is a mis-derivation/mis-seeding trap, never intent -----------
+
+@test "spec20 amendment 2026-07-29: an empty bus (nothing queued/claimed/done) aborts nonzero naming the busdir" {
+  _write_conf "claude:opus" 4 15
+
+  run timeout 20 "$RUNSH" ""
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nothing to run"* ]]
+  [[ "$output" == *"$BUS"* ]]
+}
+
+@test "spec20 amendment 2026-07-29: a bus resumed with only done/ entries (empty queue) still closes clean, no false empty-run abort" {
+  _write_conf "claude:opus" 4 15
+  mkdir -p "$BUS/done"
+  printf '{"id":"already","code":0,"lane":"claude"}\n' > "$BUS/done/already"
+
+  run timeout 20 "$RUNSH" ""
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"nothing to run"* ]]
+}
+
+@test "spec20 amendment 2026-07-29: verify on an empty bus (no done/ entries) aborts nonzero naming the trap" {
+  _write_conf "claude:opus" 4 15
+
+  run timeout 20 "$RUNSH" verify
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nothing to run"* ]]
+}
+
+@test "spec20 FR-1 amendment 2026-07-29: --run derives BUSDIR at the CALLER's cwd — the empty-run abort proves both the derivation and the trap message" {
+  _write_conf "claude:opus" 4 15
+  local scratch="$BATS_TEST_TMPDIR/cwd-scratch"
+  mkdir -p "$scratch"
+
+  run timeout 20 env -u BUSDIR -u UNIMATRIX_BUS_ROOT bash -c "cd '$scratch' && exec '$RUNSH' --run cwdtest ''"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nothing to run"* ]]
+  [[ "$output" == *"$scratch/.bus-cwdtest"* ]]
 }

@@ -173,6 +173,10 @@ load-bearing: sidecars move first by design (comment at `:886-890`), and an orph
 in `queue/` silently re-grants write access to a stale target (`src/swarm-ctl:82-90`) — a guard
 placed after the first `mv` has already done the damage it exists to prevent.
 
+**Amendment 2026-07-29:** the specs/-to-queue/ sweep refuses (loud stderr, all of the card's files left in specs/, sweep continues) any card whose prompt or existing .lane/.write/.chain/.files sidecar is empty or whitespace-only — direct specs/ seeding bypasses swarm-ctl add's validation, and an existing-but-empty card file is never legitimate. Refusal runs AFTER the done/cancelled discard arms (stale empty sidecars of terminal ids are still discarded).
+
+**New verb (2026-07-29): lint-specs [busdir].** Read-only preflight over specs/ and queue/ — validates non-empty prompt, non-empty .write naming an existing directory, .files valid per spec 14 FR-2's publish-time validator, .lane/.chain tokens on the six-lane roster (bare tokens pass; claim-time normalization per spec 10 FR-R15 resolves them). Per-card OK/FAIL lines; exits nonzero when any card fails; writes nothing.
+
 **Skip set** — four states, and the resolution method matters for the third:
 
 - `done/<id>` — the card finished.

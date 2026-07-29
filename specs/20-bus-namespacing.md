@@ -38,7 +38,7 @@ All three stay in lockstep from one token. Existing env-var overrides preserve s
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR-1 | `swarm-run.sh` accepts a `--run <label>` flag (before the `<question>` positional); when present, derive `BUSDIR` from `<label>` as `<repo>/.bus-<label>`, and set `SPEEDWARS_RUN=<label>`. Both remain overrideable by explicit env (precedence: `$BUSDIR` env > derived; `$SPEEDWARS_RUN` env > derived). | Must |
+| FR-1 | `swarm-run.sh` accepts a `--run <label>` flag (before the `<question>` positional); when present, derive `BUSDIR` from `<label>` as `<cwd>/.bus-<label>` (the caller's working directory), and set `SPEEDWARS_RUN=<label>`. Both remain overrideable by explicit env (precedence: `$BUSDIR` env > derived; `$SPEEDWARS_RUN` env > derived). | Must |
 | FR-2 | When `--run` is NOT supplied, `BUSDIR` defaults to `.bus` (today's behavior unchanged), and `SPEEDWARS_RUN` defaults per spec 08's amendment (empty, then `.run-label` file, then derived from busdir parent basename). | Must |
 | FR-3 | Collision detection after the BUSDIR path is FINAL: check the bus's existing `heartbeat` file (bus root — the spec 11 succession heartbeat; age < 60s = live). A LIVE heartbeat always refuses with loud stderr and nonzero exit — a second live pool on one busdir is never safe, same label included (that case IS an accidental double-invocation). No heartbeat, or a stale one, proceeds — same-label re-invocation of a finished/dead run resumes the bus (idempotent re-entry, stale bus reclaimable). **Amended at activation 2026-07-26 (implementation findings):** (a) the gate applies at the NEW-WORK entries only — `full_run` and `cmd_call` (in `cmd_call`, after its own busdir default resolution); `verify` is exempt: it is an owner-invoked post-pass on an existing run's bus, and gating it would refuse the very orchestrator that keeps the heartbeat fresh. (b) The heartbeat file is a bare `touch` with no owner identity, so a parent that OWNS the live heartbeat and legitimately drives a child run on its own bus — swarm-loop iterations — asserts ownership with `UNIMATRIX_BUS_OWNER=1` in the child env (env-only, never a conf key; without it every loop iteration would refuse its own parent's bus). (c) Honesty bound: the gate is exactly as strong as heartbeat discipline — bare headless `swarm-run.sh` invocations never write the heartbeat (FR-4), so two bare runs hand-pointed at one busdir remain the operator's own foot-gun, unchanged from before this spec. | Must |
 | FR-4 | Liveness derives from the EXISTING spec 11 orchestrator heartbeat (`<busdir>/heartbeat`, maintained by `swarm-ctl heartbeat`/the orchestrator loop) — spec 20 adds no second heartbeat file and no new writer; it only READS the existing one at `bus_init` collision check. | Must |
@@ -84,9 +84,9 @@ After parsing, apply precedence ONCE at run start (`full_run` → `bus_init`):
 ```bash
 # Precedence: explicit env > --run derivation > baked default
 if [[ -z "${BUSDIR:-}" && -n "$RUN_LABEL" ]]; then
-  BUSDIR="$(_abspath "$SCRIPT_DIR/.bus-$RUN_LABEL")"
+  BUSDIR="$(_abspath "$PWD/.bus-$RUN_LABEL")"
 fi
-BUSDIR="${BUSDIR:-$(_abspath "$SCRIPT_DIR/.bus")}"  # final default
+BUSDIR="${BUSDIR:-$(_abspath "$PWD/.bus")}"  # final default
 
 if [[ -z "${SPEEDWARS_RUN:-}" && -n "$RUN_LABEL" ]]; then
   SPEEDWARS_RUN="$RUN_LABEL"
@@ -129,7 +129,7 @@ Spec 20 only reads it (`_heartbeat_live`, src/swarm-lib.sh).
 - [x] `swarm-loop --run alpha ...` derives `.bus-alpha` and passes `--run alpha` + `UNIMATRIX_BUS_OWNER=1` to each iteration's `swarm-run.sh` (bats: init derivation; pass-through is in the iteration invocation line).
 - [x] An existing script that sets `BUSDIR=... ./swarm-run.sh` (no `--run`) works unchanged; env beats the derivation (bats).
 - [x] Usage text documents the `--run` flag (bats).
-- [x] `swarm-run.sh --run foo <mode>` resolves the derived bus for every mode incl. `call` (FR-6: the derivation is pinned against `call`'s cwd default).
+- [x] `swarm-run.sh --run foo <mode>` resolves the derived bus for every mode incl. `call` (FR-6: the derivation matches `call`'s cwd default).
 - [ ] Ground Control fleet view — STAGED with FR-7 (cockpit wave, not yet shipped).
 - [x] Bats: flag parsing, invalid-label refusal, collision detection, owner bypass, loop integration.
 
@@ -157,6 +157,14 @@ Spec 20 only reads it (`_heartbeat_live`, src/swarm-lib.sh).
 2. **Wave 2:** Add heartbeat liveness check (FR-3, FR-4) — ANY live heartbeat refuses, same label included (amended FR-3 is authoritative; the guard resumes only when the heartbeat is stale or absent).
 3. **Wave 3:** Wire cockpit registration (FR-7) — Ground Control lists buses by label.
 4. **Testing:** bats coverage (FR-10) at each wave; smoke-test concurrent runs before shipping Wave 2.
+
+---
+
+## Amendment — 2026-07-29 (caller-cwd derivation + empty-run abort)
+
+1. **FR-1 derivation moved from checkout to caller's cwd.** The checkout-rooted derivation (`$SCRIPT_DIR/.bus-<label>`) silently swept an empty bus when `swarm-run.sh` was launched from a target repo (gtm-owners3; feedback 2026-07-28-gtm-studio-run-flag-busdir-cwd.md). The new derivation (`$PWD/.bus-<label>`) matches `call`'s existing cwd default, collects output in the caller's working directory where the orchestrator sits, and closes the misdirection trap. `UNIMATRIX_BUS_ROOT` stays the test seam; explicit `BUSDIR` env still overrides the derivation per spec 04 precedence.
+
+2. **Empty-run abort after enqueue.** A run that finalizes enqueue with zero queued, claimed, and done cards aborts nonzero naming the resolved `BUSDIR` — a clean close over an empty sweep is a mis-derivation trap, never intent. Applies to `full_run` and `verify_run` (batch operations where the intent is always nonzero work; `cmd_call` single-card dispatch stays silent on empty).
 
 ---
 
