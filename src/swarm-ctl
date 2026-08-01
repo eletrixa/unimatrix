@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Bus-only control verbs for /swarm: pause/resume/cancel/add/abort/status/kill/nudge/unpark/
-# pause-worker/resume-worker/heartbeat/watchdog-arm/watchdog-check/watchdog-disarm/lint-specs.
+# pause-worker/resume-worker/heartbeat/watchdog-arm/watchdog-check/watchdog-disarm/lint-specs/
+# timeline.
 #
 # Project: unimatrix — multi-model swarm orchestrator driven from Claude Code
 # Module:  src/swarm-ctl
@@ -19,6 +20,9 @@
 # - report / postmortem / review-stub: spec 12 FR-5 read-only operator surfaces over the speedwars
 #   ledger — per-lane table, run-summary postmortem, and a mechanically-pre-filled run-reviews.md
 #   skeleton (stdout only, never writes)
+# - timeline: spec 21 FR-11 read-only per-card wall-clock timeline over the same ledger (+ FR-7
+#   park markers when the bus is on disk) — queue-wait/serve/attempts/lane walks, span, idle
+#   invocation gaps, critical path
 # - lint-specs: spec 01 (2026-07-29 amendment, backlog 73) read-only preflight over specs/+queue/
 #   cards and sidecars — per-card OK/FAIL, nonzero on any FAIL, writes nothing
 #
@@ -75,6 +79,8 @@ usage: swarm-ctl <verb> [args]
   watchdog-disarm [busdir] remove this busdir's tagged takeover cron line (spec 11)
   report [file]      print the speedwars per-lane table (exec src/speedwars-report.sh) (spec 12)
   postmortem [run]   pretty-print the newest run-summary row, or every row for <run> (spec 12)
+  timeline [run|busdir]    read-only per-card timeline: queue-wait/serve/attempts/lane walks/parks,
+                     span + idle invocation gaps + critical path (spec 21 FR-11)
   review-stub [busdir]  print a run-reviews.md skeleton, mechanical fields filled; writes nothing (spec 12)
   lint-specs [busdir]  read-only preflight: per-card OK/FAIL over specs/ + queue/ cards + sidecars; nonzero on any FAIL
 EOF
@@ -114,7 +120,8 @@ _reset_card_state() {
         "$busdir/limits/$id.frozen" \
         "$busdir/limits/$id.waiting" \
         "$busdir/limits/$id.waiting-write" \
-        "$busdir/limits/$id.cage-denied"
+        "$busdir/limits/$id.cage-denied" \
+        "$busdir/limits/$id.claimed-at"
 }
 
 # _cont_if_frozen <id> — STOPped processes ignore TERM; CONT first when limits/<id>.frozen is set.
@@ -460,10 +467,16 @@ cmd_kill() {
       mkdir -p "$BUSDIR/cancelled"
       mv "$claimfile" "$BUSDIR/cancelled/$id.prompt"
       # cancelling for good — drop the sidecars too (a requeue keeps them: the retry still needs
-      # its lane pin / write target).
+      # its lane pin / write target) and the whole per-card limits/ state (codex review 2026-08-01:
+      # a re-added same-id card could otherwise park pre-claim and read the CANCELLED claim's
+      # stale FR-10 stamp into its row).
       _rm_sidecars "$id"
+      _reset_card_state "$BUSDIR" "$id"
     else
       mv "$claimfile" "$BUSDIR/queue/$id.prompt"
+      # requeue keeps sidecars/retry state, but the ended claim's FR-10 stamp must die — a
+      # pre-claim park after this requeue would read it as its own (same staleness class).
+      rm -f "$BUSDIR/limits/$id.claimed-at"
     fi
   fi
   rm -f "$BUSDIR/limits/$id.frozen"
@@ -1163,6 +1176,92 @@ cmd_postmortem() {
   jq . <<<"$out"
 }
 
+# cmd_timeline [run|busdir] — spec 21 FR-11 (backlog 81): read-only per-card wall-clock timeline
+# reconstructed from EXISTING artifacts — ledger attempt rows (finalize ts, wall_secs, retries as
+# rows-per-id, lane walks via requested/served_lane + fallback_reason, queue-wait from the FR-10
+# claim-stamp keys when present) plus, when the bus is still on disk, limits/<id>.parked FR-7
+# reason tokens. Footer: total span (first..last finalize), summed final serve time, idle gaps
+# >60s between consecutive finalizes (the invocation-boundary signature — bh065: 60% of a 41-min
+# run sat in three such gaps), and the critical-path card. Degrades per-field to "-" on buses
+# predating spec 21 (no stamps); writes NOTHING (same stdout-only doctrine as review-stub).
+cmd_timeline() {
+  local target="${1:-$BUSDIR}" busdir run file
+  if [[ -d "$target" ]]; then
+    busdir="$target"
+    run="$(_run_label "$busdir")"
+  else
+    busdir="$BUSDIR"
+    run="$target"
+  fi
+  file="$(_speedwars_ledger_file "$busdir")"
+  [[ -f "$file" ]] || {
+    echo "swarm-ctl: timeline: no ledger at $file" >&2
+    return 1
+  }
+  # Tolerant reader (cmd_postmortem doctrine): one torn ledger line must not blank the timeline.
+  local rows
+  rows="$(jq -R -c 'fromjson? // empty' "$file" \
+    | jq -c --arg run "$run" 'select(type == "object" and .type == null and .run == $run)')"
+  [[ -n "$rows" ]] || {
+    echo "swarm-ctl: timeline: no attempt rows for run '$run' in $file" >&2
+    return 1
+  }
+
+  printf 'timeline: run %s (%s)\n' "$run" "$file"
+  printf '%-14s %-22s %10s %8s %8s %-10s %s\n' CARD LANE queue-wait serve attempts OUTCOME DETAILS
+
+  local id lane qws wall attempts outcome details history ptoken
+  while IFS=$'\t' read -r id lane qws wall attempts outcome details history; do
+    if [[ "$outcome" == "parked" && -f "$busdir/limits/$id.parked" ]]; then
+      # FR-7 marker line "<ISO> | <reason-token> | ..." — surface the reason token + its ISO time.
+      ptoken="$(awk -F' \\| ' 'NR == 1 { print $2 " @ " $1 }' "$busdir/limits/$id.parked" 2>/dev/null)"
+      [[ -n "$ptoken" ]] && details="${details:+$details }$ptoken"
+    fi
+    printf '%-14s %-22s %10s %8s %8s %-10s %s\n' "$id" "$lane" "$qws" "$wall" "$attempts" "$outcome" "$details"
+    # earlier attempts, one indented line each (codex review 2026-08-01: a retried card's failed
+    # 600s attempt must be locatable on the timeline, not folded into a bare count).
+    if [[ -n "$history" ]]; then
+      local h
+      while IFS= read -r h; do
+        [[ -n "$h" ]] && printf '  %-12s %s\n' '..attempt' "$h"
+      done <<<"${history//;/$'\n'}"
+    fi
+  done < <(jq -rs '
+    group_by(.id)[] | .[-1] as $l |
+    [ $l.id,
+      ($l.served_lane // $l.requested // "-"),
+      ($l.queue_wait_secs | if . == null then "-" else tostring end),
+      ($l.wall_secs | if . == null then "-" else tostring end),
+      (length | tostring),
+      ($l.outcome // "-"),
+      ($l.fallback_reason // ""),
+      (.[0:-1] | map(
+        "\(.served_lane // .requested // "-") \(.outcome // "-") \(.wall_secs // "-")s @ \(.ts)"
+        + (if .fallback_reason then " (" + .fallback_reason + ")" else "" end)
+      ) | join(";")) ]
+    | @tsv' <<<"$rows")
+
+  # Footer math runs on per-attempt SERVE INTERVALS [ts - wall_secs, ts] (row ts is finalize;
+  # spawn is derived, so archived buses with no run logs still reconstruct) — merged with a 60s
+  # tolerance, so span covers first spawn..last finalize and a gap is genuine idle bus between
+  # activity clusters (the relaunch signature), not merely the space between two finalizes.
+  jq -rs '
+    ([.[] | select(.ts != null)
+        | (.ts | fromdateiso8601) as $e | {s: ($e - (.wall_secs // 0)), e: $e}]
+      | sort_by(.s)) as $iv |
+    (reduce $iv[] as $i ([];
+       if length == 0 or $i.s > (.[-1].e + 60) then . + [$i]
+       else .[:-1] + [{s: .[-1].s, e: ([$i.e, .[-1].e] | max)}] end)) as $merged |
+    (if ($merged | length) > 0 then ($merged[-1].e) - ($merged[0].s) else 0 end) as $span |
+    ([range(1; ($merged | length)) | $merged[.].s - $merged[. - 1].e]) as $gaps |
+    (([.[].wall_secs // 0] | add) // 0) as $serve |
+    (map(select(.wall_secs != null)) | sort_by(-.wall_secs) | first) as $crit |
+    "-- total span: \($span)s   serve (sum of ALL attempts): \($serve)s",
+    "-- idle gaps >60s between activity clusters (invocation boundaries): \($gaps | length) (total \($gaps | add // 0)s)",
+    (if $crit then "-- critical path: \($crit.id) (\($crit.wall_secs)s on \($crit.served_lane // $crit.requested))" else empty end)
+  ' <<<"$rows"
+}
+
 # cmd_review_stub [busdir] — spec 12 FR-5: print (stdout ONLY — writes nothing) a run-reviews.md-
 # style skeleton for this bus: mechanical fields pre-filled from the ledger's branch rows for this
 # bus's run plus this bus's own done/ count; subjective sections (lane scorecards, what-slowed,
@@ -1261,6 +1360,7 @@ case "$verb" in
   watchdog-disarm) cmd_watchdog_disarm "${1:-}" ;;
   report) cmd_report "$@" ;;
   postmortem) cmd_postmortem "${1:-}" ;;
+  timeline) cmd_timeline "${1:-}" ;;
   review-stub) cmd_review_stub "${1:-}" ;;
   lint-specs) cmd_lint_specs "${1:-}" ;;
   *) usage ;;

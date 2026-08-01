@@ -68,6 +68,8 @@ fix card + one re-verify, never per-finding ping-pong. Anthropic names synchrono
 their own bottleneck; we measured it at 1.18×.
 
 **R4 — per-lane concurrency budgets + backoff** (backlog 12, 20; HiveMind/CONCUR AIMD evidence).
+*Budgets half SHIPPED 2026-07-31 as spec 21 FR-13: `LANE_MAX_<LANE>` conf keys, capped lane
+skipped at claim (never wedges the pool). Backoff/ramp below remains open.*
 `LANE_MAX_CONCURRENT` per lane in swarm.conf (codex high, glm conservative until probed higher);
 2-5s same-lane spawn stagger at pool fill (Postfix slow-start analogy — the herd, not the token,
 was the blocker); exponential backoff on retry (observed: 12 retries in 9s, no backoff); auth

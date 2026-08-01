@@ -217,3 +217,5 @@ version adds a reasoning counter to the envelope — re-run the same archive swe
 - [x] grok + codex rows carry `tokens_reasoning` (already shipped, `speed_row`)
 - [x] claude/glm/kimi rows omit the field entirely (absence-means-absent — correct, since the
       envelope has no counter)
+
+**Amendment pointer 2026-07-31 → [spec 21](./21-speed-observability.md):** FR-10 claim stamping promoted — `limits/<id>.claimed-at` + additive `claim_ts`/`queue_wait_secs` row keys + `top_wall` run-summary key (the 'ask first' capture-beyond-finalize sign-off is recorded there).

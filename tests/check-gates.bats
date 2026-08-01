@@ -274,10 +274,11 @@ setup() {
     cp "$REPO/$f" "$empty/$f"
   done
   git -C "$empty" init -q
-  # 45s, not a tight bound: shellcheck (the step right after host-path in the new order) genuinely
-  # takes ~15s over this project's large scripts — the point is proving no INDEFINITE stdin block,
-  # not benchmarking shellcheck.
-  run timeout 45 env CHECK_SKIP_BATS=1 "$empty/check.sh"
+  # 180s, not a tight bound: shellcheck (the step right after host-path in the new order) takes
+  # ~30s CPU over this project's large scripts (2026-08-01: grown well past the ~15s the old 45s
+  # bound assumed) and wall-time scales with box load — the point is proving no INDEFINITE stdin
+  # block, not benchmarking shellcheck.
+  run timeout 180 env CHECK_SKIP_BATS=1 "$empty/check.sh"
   [ "$status" -ne 124 ]
   [[ "$output" == *"no tracked files under"* ]]
   [[ "$output" == *"host-path gate clean"* ]]

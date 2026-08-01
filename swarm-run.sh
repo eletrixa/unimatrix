@@ -9,6 +9,11 @@
 # Tested:  tests/swarm-run.bats (PATH-shimmed fake CLIs — no real API calls)
 #
 # Key responsibilities:
+# - spec 21 speed surfaces: POOL_LINGER_SEC drain-linger in the pool gate (late adds served
+#   without relaunch), longest-job-first claim ordering, LANE_MAX_<lane> in-flight caps at the
+#   dispatch choke point, claim-time .files-vs-cage preflight (instant cage-denied park), the
+#   FR-10 claim stamp (limits/<id>.claimed-at), PROBE_TIMEOUT_SEC-capped probes with 600s
+#   probe-FAIL markers + diag pointers, and the BROKEN_MIN_CARDS distinct-card bench threshold
 # - Enqueue (specs/ -> queue/, moving optional <id>.lane (FR-2b), <id>.write (FR-15), and <id>.chain
 #   (spec10 FR-R2, orchestrator-pinned fallback chain seed) sidecars alongside), run the
 #   claim/spawn/finalize pool, gate on done+parked >= live (FR-7), exit 0 unless something parked
@@ -112,10 +117,28 @@ _abspath() {
 # the target repo; a mismatch is caught by the empty-run abort below (_refuse_empty_run).
 # UNIMATRIX_BUS_ROOT is a TEST seam only (bats must not create .bus-* inside the real checkout);
 # operators never set it.
+# spec 21 FR-6: `--busdir <path>` assigns BUSDIR explicitly — same authority as a BUSDIR env
+# (it lands before the _BUSDIR_FROM_ENV capture below, so the --run derivation is skipped and
+# every downstream consumer is untouched). The escape hatch for cwd-derivation footguns: a
+# persistent-shell orchestrator whose cwd drifted (bh065: a subdir relaunch and one compound-
+# command `cd` produced a "nothing to run" abort and a nested junk bus) pins the bus by path.
 RUN_LABEL=""
-while [[ "${1:-}" == --run ]]; do
-  if [[ $# -lt 2 ]]; then echo "swarm-run: --run needs a label" >&2; exit 1; fi
-  RUN_LABEL="$2"; shift 2
+_WANT_USAGE=0
+while [[ "${1:-}" == --run || "${1:-}" == --busdir || "${1:-}" == --help || "${1:-}" == -h ]]; do
+  case "$1" in
+    --help | -h)
+      # usage() is defined below (it needs the heredoc after conf docs) — flag now, print after.
+      _WANT_USAGE=1
+      shift
+      continue
+      ;;
+  esac
+  if [[ $# -lt 2 ]]; then echo "swarm-run: $1 needs a value" >&2; exit 1; fi
+  case "$1" in
+    --run) RUN_LABEL="$2" ;;
+    --busdir) BUSDIR="$2" ;;
+  esac
+  shift 2
 done
 if [[ -n "$RUN_LABEL" && ! "$RUN_LABEL" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "swarm-run: invalid --run label '$RUN_LABEL' (allowed: A-Za-z0-9._-)" >&2
@@ -148,9 +171,14 @@ usage: swarm-run.sh [--run <label>] --plan-only "<question>"
 --run <label> (spec 20): derives BUSDIR=.bus-<label> and SPEEDWARS_RUN=<label> from one token so
 concurrent swarms stop colliding on one bus. Explicit BUSDIR/SPEEDWARS_RUN env vars override the
 derivation. A bus whose heartbeat is live (<60s) refuses a new run.
+--busdir <path> (spec 21): pins BUSDIR explicitly (same authority as a BUSDIR env var — beats the
+--run cwd derivation), for orchestrators whose shell cwd cannot be trusted.
 EOF
-  exit 1
+  # An asked-for usage (--help/-h) exits 0 per CLI convention; a parse-error usage stays 1.
+  exit "${1:-1}"
 }
+# --help/-h captured in the option loop above (usage() wasn't defined yet at that point).
+(( _WANT_USAGE )) && usage 0
 
 # _print_config_table — specs/04 FR-2's fully-resolved-config contract: EVERY conf_load key, no
 # hand-maintained subset (five keys had already drifted out of it). CONF_KEYS (src/swarm-lib.sh) is
@@ -322,8 +350,11 @@ _reason_retryable() {
 _park_card() {
   local id="$1" lane="$2" pinned="${3:-0}" class="${4:-parked-env}"
   local reason="${5:-$class}"
+  # spec 21 FR-9: optional 6th arg extends the marker text (paths/ids/tokens only, spec 14 FR-7) —
+  # the cage-preflight park names its violating .files entry so the operator needn't spelunk.
+  local text="lane=$lane pinned=$pinned${6:+ $6}"
   local retryable; retryable="$(_reason_retryable "$reason")"
-  _marker_line "$reason" "$retryable" 0 "lane=$lane pinned=$pinned" > "$BUSDIR/limits/$id.parked"
+  _marker_line "$reason" "$retryable" 0 "$text" > "$BUSDIR/limits/$id.parked"
   [[ "${SPEEDWARS_AUTO:-1}" == "1" ]] \
     && speed_row "$BUSDIR" "$id" "$lane" "parked" "" "$pinned" "$class" 2>/dev/null || true
 }
@@ -358,8 +389,12 @@ _probe_lane_event() {
   fi
   printf 'FAIL %s %s\n' "$trigger" "$out" > "$mark"
   _doctor_ledger_row "$bare" "auto live-probe FAILED ($trigger) — $out"
-  broken_flag "$BUSDIR" "$bare"
-  echo "swarm-run: lane '$bare' failed its $trigger live probe — $out; marked lane-down" >&2
+  # spec 21 FR-3 (backlog 76): a probe FAIL is ONE data point, not a lane verdict — short-TTL
+  # 600s, never the 1800s bench (pure064: one cold-start probe timeout benched a healthy lane 30
+  # minutes). The reason carries the probe's own failure text ($out — timeout/exit/HTTP tokens,
+  # plus a diag= PATH to the stderr tail when one was captured; never stderr content itself).
+  broken_flag "$BUSDIR" "$bare" 600 lane-down "$trigger probe: $out"
+  echo "swarm-run: lane '$bare' failed its $trigger live probe — $out; marked lane-down (600s)" >&2
   return 1
 }
 
@@ -367,7 +402,14 @@ _try_claim_one() {
   CLAIMED_ID=""; CLAIMED_LANE=""
   [[ -e "$BUSDIR/PAUSE" ]] && return 2
   local f id lane bare_lane
-  for f in "$BUSDIR"/queue/*.prompt; do
+  # spec 21 FR-14: longest-job-first — iterate queue/ in descending prompt byte-size (size is the
+  # job-length proxy; a long card started last becomes the whole wave's critical path — bh065: one
+  # 553s card bounded a 9.2-min invocation). Deterministic: size desc, then name asc on ties.
+  local -a _qfiles=()
+  while IFS= read -r f; do _qfiles+=("$f"); done < <(
+    find "$BUSDIR/queue" -maxdepth 1 -name '*.prompt' -printf '%s %p\n' 2>/dev/null \
+      | sort -k1,1rn -k2,2 | cut -d' ' -f2-)
+  for f in "${_qfiles[@]}"; do
     [[ -e "$f" ]] || continue
     id="$(basename "$f" .prompt)"
     [[ -e "$BUSDIR/limits/$id.parked" ]] && continue
@@ -434,6 +476,30 @@ _try_claim_one() {
         continue
       fi
       rm -f "$BUSDIR/limits/$id.waiting-write"
+
+      # spec 21 FR-9 (backlog 80): the .files manifest is the one pre-spawn write-path source of
+      # truth (spec 14 FR-2) — resolve every entry against the cage NOW and park the card whose
+      # manifest has ZERO in-cage entries, instead of spawning a worker whose finalize gate is a
+      # guaranteed park minutes later (bh065 f1: 180s of glm work discarded on a scope error
+      # knowable at claim). A MIXED manifest proceeds: spec 14 FR-2's finalize gate ignores the
+      # escaping entries loudly and judges the in-cage ones — parking those here would turn the
+      # FR-2 ignore contract into a denial. Cards without a manifest are untouched — their write
+      # discipline stays the diff gate + review wave.
+      if [[ -f "$BUSDIR/queue/$id.files" ]]; then
+        local _mfp _viol="" _incage=0
+        # `|| [[ -n ... ]]`: a manifest whose final entry lacks a trailing newline must still be
+        # checked (codex review 2026-08-01 — an escaping last-line entry slipped the preflight).
+        while IFS= read -r _mfp || [[ -n "$_mfp" ]]; do
+          [[ -z "${_mfp//[[:space:]]/}" ]] && continue
+          if _path_resolves_under "$_mfp" "$wcanon"; then _incage=1; else _viol="${_viol:-$_mfp}"; fi
+        done < "$BUSDIR/queue/$id.files"
+        if [[ -n "$_viol" && "$_incage" -eq 0 ]]; then
+          echo "swarm-run: $id refused — .files entry '$_viol' resolves outside the write cage '$wcanon'; parking (cage-denied)" >&2
+          local orig_bare; orig_bare="$(_orig_chain_bare "$BUSDIR" "$id")"
+          _park_card "$id" "$orig_bare" 0 cage-denied cage-denied "files-entry=$_viol cage=$wcanon"
+          continue
+        fi
+      fi
     fi
 
     if [[ -f "$BUSDIR/queue/$id.lane" ]]; then
@@ -552,6 +618,31 @@ _try_claim_one() {
       lane="$fr15_resolved"
     fi
 
+    # spec 21 FR-13 (backlog 82): per-lane in-flight ceiling, counted against claimed/ at THIS
+    # dispatch choke point (pinned and chain paths both land here — bare_lane is already this
+    # card's settled bare lane on both). At cap the CARD is skipped — lane_blocked semantics: the
+    # loop scans on so other cards/lanes fill the FANOUT slots and a capped lane can never wedge
+    # the pool. Empty or <=0 = unlimited (a 0 that meant "never" would deadlock a run whose only
+    # cards pin that lane). Transient by construction: no marker, no chain_advance — the next
+    # pool tick re-checks a live count.
+    local _lmvar _lmcap
+    _lmvar="LANE_MAX_${bare_lane^^}"
+    _lmcap="${!_lmvar:-}"
+    if [[ -n "$_lmcap" ]] && (( _lmcap > 0 )); then
+      # _claim_meta is THE claim-filename split primitive (spec 14 FR-6) — reuse it instead of
+      # hand-rolling the suffix regex again (same loop shape as lane_has_live_worker).
+      local _lminflight=0 _lmcf _lmcid _lmclane
+      for _lmcf in "$BUSDIR"/claimed/*; do
+        [[ -e "$_lmcf" ]] || continue
+        # shellcheck disable=SC2034  # id half of _claim_meta's split unused here, only lane matters
+        read -r _lmcid _lmclane <<<"$(_claim_meta "$BUSDIR" "$_lmcf")"
+        [[ "$_lmclane" == "$bare_lane" ]] && _lminflight=$(( _lminflight + 1 ))
+      done
+      if (( _lminflight >= _lmcap )); then
+        continue
+      fi
+    fi
+
     # spec 13 FR-6 pre-claim arm (backlog 58): the lane's FIRST card this run fires one live probe
     # before any worker spawns. On FAIL the lane is .broken as of NOW — rescan, so this card routes
     # around it through the ordinary lane_blocked walk above instead of burning MAX_LANE_RETRIES
@@ -561,10 +652,29 @@ _try_claim_one() {
       continue
     fi
 
-    local crc=0
+    local crc=0 _cb=0
+    # spec 21 FR-10: the queue file's birth (%W) must be read BEFORE claim() — claim's FR-14
+    # inode re-mint (2026-08-01) creates a fresh file, so the claimed file's birth is claim time
+    # and the queue-wait it fed would always be 0. The queue .prompt still carries the spec
+    # file's creation birth (preserved by the sweep's mv, untouchable by heartbeat `touch -c`).
+    # A lost claim race just discards the value.
+    _cb="$(_stat_birth "$BUSDIR/queue/$id.prompt")"
     claim "$BUSDIR" "$id" "$lane" || crc=$?
     if (( crc == 0 )); then
       CLAIMED_ID="$id"; CLAIMED_LANE="$lane"
+      # spec 21 FR-10 (spec 08 FR-10 promotion, sign-off in spec 21 Status): the claim stamp —
+      # queue-wait computed HERE, where both instants exist: the queue file's pre-claim birth
+      # (read above) and now. speed_row READS the stamp into claim_ts + queue_wait_secs; only the
+      # claim's TERMINAL row (done/timeout-salvaged/parked) deletes it, so a pinned terminal
+      # failure's two rows (attempt then parked) both carry the keys. A re-claim overwrites
+      # with `>`.
+      # %W=0 (no birth support) omits the qws token and the row key degrades out.
+      if [[ "${SPEEDWARS_AUTO:-1}" == "1" ]]; then
+        local _cnow _cqws=""
+        _cnow="$(date +%s)"
+        (( _cb > 0 && _cb <= _cnow )) && _cqws=$(( _cnow - _cb ))
+        _marker_line claimed 0 0 "lane=$lane${_cqws:+ qws=$_cqws}" > "$BUSDIR/limits/$id.claimed-at"
+      fi
       return 0
     elif (( crc == 2 )); then
       return 2
@@ -798,6 +908,18 @@ _cage_is_shared() {
 # that reached the bus anyway (hand-written sidecar, older publisher) is a scoping aid, never a way
 # to widen the cage. Set as a global rather than echoed because a path list round-tripped through
 # command substitution loses entries containing whitespace.
+# _path_resolves_under <entry> <cage-canon> — rc 0 iff <entry> (absolute as-is, relative joined
+# against <cage-canon>) resolves inside <cage-canon>. The one resolve-then-prefix-test primitive,
+# shared by the FR-9 claim-time preflight and (shape-wise) _manifest_roots below.
+_path_resolves_under() {
+  local entry="$1" cage="$2" abs
+  case "$entry" in
+    /*) abs="$(realpath -m -- "$entry" 2>/dev/null || printf '%s' "$entry")" ;;
+    *)  abs="$(realpath -m -- "$cage/$entry" 2>/dev/null || printf '%s/%s' "$cage" "$entry")" ;;
+  esac
+  [[ "$abs" == "$cage" || "$abs" == "$cage"/* ]]
+}
+
 _manifest_roots() {
   local id="$1" wtarget="$2" tcanon rel abs
   MANIFEST_ROOTS=()
@@ -847,10 +969,15 @@ _archive_and_release() {
   if [[ -e "$BUSDIR/queue/$id.files" ]]; then
     cp -f "$BUSDIR/queue/$id.files" "$BUSDIR/files-$id.txt" || return 1
   fi
+  # spec 21 review round: .failcards-$bare resets on the lane's recovery exactly like
+  # .dead/.broken — stale fast-fail evidence must not pair with an unrelated incident hours
+  # later into a 1800s bench. ($id.claimed-at is NOT cleared here: this runs BEFORE the done
+  # row's speed_row, which still needs to read it — the terminal speed_row deletes it.)
   rm -f "$BUSDIR/claimed/$id.$lane" "$BUSDIR/queue/$id.lane" "$BUSDIR/queue/$id.write" \
         "$BUSDIR/queue/$id.chain" "$BUSDIR/queue/$id.files" "$BUSDIR/limits/$id.waiting" \
         "$BUSDIR/limits/$id.waiting-write" "$BUSDIR/limits/$id.cage-denied" \
-        "$BUSDIR/limits/$bare.dead" "$BUSDIR/limits/$bare.broken" || return 1
+        "$BUSDIR/limits/$bare.dead" "$BUSDIR/limits/$bare.broken" \
+        "$BUSDIR/limits/.failcards-$bare" || return 1
   return 0
 }
 
@@ -976,10 +1103,12 @@ _check_cage_denied() {
 # FR-14: <token> is this worker's claim file identity (dev:inode, captured by _run_pool at claim
 # time) — the fencing token against lease-steal double-finalize. A slow-but-alive worker whose
 # lease got reaped is re-queued and re-claimed (often onto the SAME lane, since reap doesn't touch
-# EXEC_CHAIN state — same path, a NEW file/inode); if the stale original finishes later and this
-# check only looked at the PATH, it would still find "a file there" and clobber the retry's
-# result. Comparing the inode catches that a same-path claim has since been recreated out from
-# under it. Applies to every finalize path uniformly: whatever this worker thinks happened, a
+# EXEC_CHAIN state — same path, a NEW inode because claim() re-mints it (2026-08-01: mv alone
+# preserved the inode across steal/re-claim, so the stale token still matched when the retry
+# claimed before the stale worker woke — the fence only held in the other interleave)); if the
+# stale original finishes later and this check only looked at the PATH, it would still find "a
+# file there" and clobber the retry's result. Comparing the inode catches that a same-path claim
+# has since been recreated out from under it. Applies to every finalize path uniformly: whatever this worker thinks happened, a
 # fenced-out worker's view of id's fate is moot — something newer already owns it.
 # _lane_auth_dead <bare> — spec 14 FR-6 cross-review MAJOR: an auth-death envelope that got
 # downgraded (a live sibling was on the lane) never writes `.dead` at all — the lib's own downgrade
@@ -1203,6 +1332,19 @@ _finalize_worker() {
     # until that sibling happens to finalize. Downgraded, never skipped: the card still failed and
     # that deserves a record, so the lane takes a short-TTL .limited instead of .broken. The CLASS
     # stays lane-down either way — the card's own fate is unchanged, only the lane's.
+    # spec 21 FR-5 (backlog 76): every fast-failed card id accumulates in limits/.failcards-<bare>
+    # (one write(2) append) — the 1800s bench needs BROKEN_MIN_CARDS DISTINCT cards' evidence;
+    # one card's retry burst writes the 600s short-TTL form instead. spec 21 FR-4: the marker
+    # points at the card's stderr file by PATH (the evidence drill-down) — never its content
+    # (spec 14 FR-7 scrub-by-construction).
+    # Decay (codex review 2026-08-01): if no .broken marker is currently active on this lane, any
+    # prior incident's window has expired — start the distinct-card count fresh, or two isolated
+    # transients hours apart would pair into a 1800s bench (the pure064 class, time-shifted).
+    lane_broken "$BUSDIR" "$bare" || : > "$BUSDIR/limits/.failcards-$bare"
+    printf '%s\n' "$id" >> "$BUSDIR/limits/.failcards-$bare"
+    local _fcn _serrref=""
+    _fcn="$(sort -u "$BUSDIR/limits/.failcards-$bare" 2>/dev/null | wc -l)"
+    [[ -s "$BUSDIR/run-$id.jsonl.stderr" ]] && _serrref=" stderr=run-$id.jsonl.stderr"
     if lane_has_live_worker "$BUSDIR" "$bare" "$id"; then
       # cross-review MAJOR: this downgrade stays a SHORT-TTL `.broken`, never `.limited` — `.broken`
       # is cleared by the lane's own next successful finalize (_archive_and_release), which is
@@ -1210,9 +1352,12 @@ _finalize_worker() {
       # code path except its own TTL, so switching families here would make the downgrade outlive
       # the very evidence (a healthy sibling) that justified it.
       echo "swarm-run: $bare fast-fail on $id NOT flagged .broken (long) — a sibling worker on this lane is live; short-TTL .broken instead" >&2
-      broken_flag "$BUSDIR" "$bare" 600 lane-down "$bare: fast-fail on card $id downgraded — sibling live"
+      broken_flag "$BUSDIR" "$bare" 600 lane-down "$bare: fast-fail on card $id downgraded — sibling live$_serrref"
+    elif (( _fcn >= ${BROKEN_MIN_CARDS:-2} )); then
+      broken_flag "$BUSDIR" "$bare" 1800 lane-down "lane $bare fast-failed ($_fcn cards)$_serrref"
     else
-      broken_flag "$BUSDIR" "$bare"
+      echo "swarm-run: $bare fast-fail on $id below BROKEN_MIN_CARDS(${BROKEN_MIN_CARDS:-2}) — short-TTL .broken" >&2
+      broken_flag "$BUSDIR" "$bare" 600 lane-down "lane $bare fast-failed (card $id, below threshold)$_serrref"
     fi
   else
     class="${fail_class:-no-answer}"
@@ -1270,7 +1415,7 @@ _finalize_worker() {
 # (full_run backgrounds this under `set -m`), so `swarm-ctl abort` can kill it in one shot.
 _run_pool() {
   local -A pid_id=() pid_lane=() pid_token=()
-  local running=0
+  local running=0 drained_at=""
 
   while true; do
     reap "$BUSDIR" "$LEASE_MIN"
@@ -1286,8 +1431,19 @@ _run_pool() {
     # other. _check_parked (called after the pool returns) is what makes this loud, not silent.
     parked_n="$(find "$BUSDIR/limits" -maxdepth 1 -name '*.parked' 2>/dev/null | wc -l)"
     if (( done_n + parked_n >= live_n )) && (( running == 0 )); then
-      break
+      # spec 21 FR-1: a drained pool lingers POOL_LINGER_SEC before closing, re-scanning queue/
+      # every tick — a late `swarm-ctl add` (dependent card, review/fix wave) is served by THIS
+      # invocation instead of costing a full engine relaunch (bh065: one unclaimed late card =
+      # 16.2 min of idle bus). New work makes the drain condition false again, which resets the
+      # timer via the else-arm below. Default 0 = break immediately, today's exact behavior.
+      drained_at="${drained_at:-$SECONDS}"
+      if (( SECONDS - drained_at >= ${POOL_LINGER_SEC:-0} )); then
+        break
+      fi
+      sleep 1
+      continue
     fi
+    drained_at=""
 
     while (( running < FANOUT )); do
       local crc=0
@@ -1426,6 +1582,15 @@ _refuse_empty_run() {
   if (( total_n == 0 )); then
     echo "swarm-run: nothing to run — $BUSDIR has no queued, claimed, or done cards; aborting" >&2
     echo "swarm-run: note --run <label> derives BUSDIR at the caller's cwd — launch from the target repo, seed specs/ into this bus first, or set BUSDIR explicitly" >&2
+    # spec 21 FR-7: detect-and-suggest, never auto-prefer — the usual mis-derivation is a cwd that
+    # drifted below the repo root, so the bus the operator MEANT usually sits at the git toplevel.
+    if [[ -n "$RUN_LABEL" ]]; then
+      local top
+      top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+      if [[ -n "$top" && -d "$top/.bus-$RUN_LABEL" && "$top/.bus-$RUN_LABEL" != "$BUSDIR" ]]; then
+        echo "swarm-run: found existing $top/.bus-$RUN_LABEL at the git toplevel — launch from there, or pass --busdir $top/.bus-$RUN_LABEL" >&2
+      fi
+    fi
     return 1
   fi
   return 0
@@ -1730,6 +1895,23 @@ _doctor_probe_model() {
 # pollutes a real session's local state.
 _doctor_probe_lane() {
   local lane="$1" t0 t1 ms status="FAIL" reason="unknown" note=""
+  # One stderr capture file for EVERY transport (codex review 2026-08-01: curl DNS/TLS failures
+  # deserve the same FR-3 diag as CLI failures); cage is CLI-arm-only but the trap must cover
+  # both, so it is declared (empty) here and the CLI arm only assigns it.
+  local cage="" _perr
+  _perr="$(mktemp)"
+  # shellcheck disable=SC2064  # deliberate early expansion would be wrong here; vars resolve at fire time
+  trap '[[ -n "$cage" ]] && rm -rf "$cage"; rm -f "$_perr"' RETURN
+  # spec 21 FR-2 (backlog 76): one resolved timeout for every probe transport. Explicit
+  # PROBE_TIMEOUT_SEC applies to ALL lanes; otherwise 30s for claude AND codex — the claude probe
+  # spawns the real CLI in a cold `env -i` scratch-home cage, the same cold-start profile that
+  # earned codex its 30s (pure064: a healthy claude lane FAILed a 10s probe and sat benched 30
+  # minutes) — and 10s for the rest.
+  local cap="${PROBE_TIMEOUT_SEC:-}"
+  if [[ -z "$cap" ]]; then
+    cap=10
+    case "$lane" in claude | codex) cap=30 ;; esac
+  fi
   t0="$(_ms_now)"
   case "$lane" in
     glm | kimi)
@@ -1751,9 +1933,9 @@ _doctor_probe_lane() {
         # gemini docker lane away from exactly this (`-e NAME=value` -> bare `-e NAME`); the probe
         # path must not reintroduce it.
         http="$(printf 'x-api-key: %s\nanthropic-version: 2023-06-01\ncontent-type: application/json\n' "$key" \
-          | curl -sS -m 10 -o "$bodyfile" -w '%{http_code}' -X POST "$base/v1/messages" -H @- \
+          | curl -sS -m "$cap" -o "$bodyfile" -w '%{http_code}' -X POST "$base/v1/messages" -H @- \
           -d "$(jq -nc --arg m "$model" '{model:$m,max_tokens:1,messages:[{role:"user",content:"hi"}]}')" \
-          2>/dev/null)" || crc=$?
+          2>"$_perr")" || crc=$?
         rm -f "$bodyfile"
         if (( crc != 0 )); then reason="curl rc $crc"
         elif [[ "$http" == 2* ]]; then status=PASS
@@ -1770,10 +1952,10 @@ _doctor_probe_lane() {
         # Same stdin-header rule as glm/kimi, and the x-goog-api-key HEADER instead of the `?key=`
         # query parameter — a key in a URL also lands in proxy/access logs and shell history.
         http="$(printf 'x-goog-api-key: %s\ncontent-type: application/json\n' "$gkey" \
-          | curl -sS -m 10 -o /dev/null -w '%{http_code}' -H @- \
+          | curl -sS -m "$cap" -o /dev/null -w '%{http_code}' -H @- \
           "https://generativelanguage.googleapis.com/v1beta/models/$gmodel:generateContent" \
           -d '{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":1}}' \
-          2>/dev/null)" || crc=$?
+          2>"$_perr")" || crc=$?
         if (( crc != 0 )); then reason="curl rc $crc"
         elif [[ "$http" == 2* ]]; then status=PASS
         elif [[ "$http" == 404 ]]; then
@@ -1784,8 +1966,8 @@ _doctor_probe_lane() {
           # annotated), anything else is the real failure. Costs zero tokens.
           local http2 crc2=0
           http2="$(printf 'x-goog-api-key: %s\n' "$gkey" \
-            | curl -sS -m 10 -o /dev/null -w '%{http_code}' -H @- \
-            "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1" 2>/dev/null)" || crc2=$?
+            | curl -sS -m "$cap" -o /dev/null -w '%{http_code}' -H @- \
+            "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1" 2>"$_perr")" || crc2=$?
           if (( crc2 == 0 )) && [[ "$http2" == 2* ]]; then
             status=PASS; note="auth ok; model '$gmodel' is a CLI alias unknown to REST"
           else
@@ -1806,24 +1988,21 @@ _doctor_probe_lane() {
         # own "only flag .broken when a bus already existed" guard. RETURN trap = one cleanup for
         # every exit path out of this function.
         cage="$(mktemp -d)"
-        trap 'rm -rf "$cage"' RETURN
         home="$(_scratch_home "$cage" "$lane")"
         case "$lane" in
           claude)
-            env -i "PATH=$PATH" "HOME=$home" LANG=C.UTF-8 timeout 10 \
-              claude -p --output-format stream-json --verbose "hi" >/dev/null 2>&1 || rc=$?
+            env -i "PATH=$PATH" "HOME=$home" LANG=C.UTF-8 timeout "$cap" \
+              claude -p --output-format stream-json --verbose "hi" >/dev/null 2>"$_perr" || rc=$?
             ;;
           codex)
-            # 30s, not the 10s the other lanes get: codex exec's cold start alone regularly
-            # exceeds 10s (measured live 2026-07-25 — a healthy authed lane FAILed "timeout (10s)").
-            env -i "PATH=$PATH" "HOME=$home" LANG=C.UTF-8 timeout 30 \
+            env -i "PATH=$PATH" "HOME=$home" LANG=C.UTF-8 timeout "$cap" \
               codex exec --json -s read-only --skip-git-repo-check -C "$SCRIPT_DIR" --ephemeral "hi" \
-              >/dev/null 2>&1 || rc=$?
+              >/dev/null 2>"$_perr" || rc=$?
             ;;
           grok)
-            env -i "PATH=$PATH" "HOME=$home" LANG=C.UTF-8 timeout 10 \
+            env -i "PATH=$PATH" "HOME=$home" LANG=C.UTF-8 timeout "$cap" \
               grok -p "hi" --output-format streaming-json --no-auto-update \
-              --tools read_file,grep,list_dir --no-subagents >/dev/null 2>&1 || rc=$?
+              --tools read_file,grep,list_dir --no-subagents >/dev/null 2>"$_perr" || rc=$?
             ;;
         esac
         # grok's OAuth refresh is SINGLE-USE: the moment the caged CLI refreshes, the master copy
@@ -1831,7 +2010,6 @@ _doctor_probe_lane() {
         # refreshes exactly like a worker spawn does, so it owes the same write-back — on FAIL too
         # (the token may have rotated before whatever made the probe fail).
         [[ "$lane" == grok ]] && _grok_token_sync "$home"
-        local cap=10; [[ "$lane" == codex ]] && cap=30
         if (( rc == 124 )); then reason="timeout (${cap}s)"
         elif (( rc != 0 )); then reason="exit $rc"
         else status=PASS; fi
@@ -1839,6 +2017,21 @@ _doctor_probe_lane() {
       ;;
     *) reason="unknown lane '$lane'" ;;
   esac
+  # spec 21 FR-3 (all transports): persist the probe's stderr tail as a BUS-LOCAL diag file and
+  # point the reason at it by PATH — never inline stderr content into the reason itself: marker
+  # lines are scrub-by-construction (spec 14 FR-7, quoted into tracked feedback stubs). Only when
+  # this bus already exists — a bare `doctor --live` on a busless checkout must not scaffold
+  # limits/ (same guard doctrine as cmd_doctor_live's own .broken write). Staleness (codex review
+  # 2026-08-01): a PASS, or a FAIL with no stderr, REMOVES any prior diag so an old incident's
+  # tail can never masquerade as current lane health.
+  if [[ -d "$BUSDIR/limits" ]]; then
+    if [[ "$status" == FAIL && -s "$_perr" ]]; then
+      tail -c 200 "$_perr" > "$BUSDIR/limits/$lane.probe-stderr" 2>/dev/null \
+        && reason="$reason diag=limits/$lane.probe-stderr"
+    else
+      rm -f "$BUSDIR/limits/$lane.probe-stderr"
+    fi
+  fi
   t1="$(_ms_now)"
   ms=$(( t1 - t0 ))
   if [[ "$status" == PASS ]]; then

@@ -27,6 +27,7 @@ a read-only tmux/WezTerm monitoring cockpit. No MCP, no daemon, no DB.
 | [17-plugin](./17-plugin.md) | Active | Plugin packaging: `/u:*` colon namespace from any repo/account via self-marketplace, generated pointer commands, `unimatrix install`/`here`, `doctor --plugin` drift table |
 | [18-evidence-contract](./18-evidence-contract.md) | Active | Push summary + bus archives + `report --html` + fleetops producer contract (`sql/uni-schema.sql`, D1 contract-first) + D2 gate; executable mirror reserved for spec 19 |
 | [20-bus-namespacing](./20-bus-namespacing.md) | Active | Per-run bus namespacing: one `--run <label>` atomically derives BUSDIR + SPEEDWARS_RUN + cockpit identity; live-heartbeat collision refusal (backlog 11/21; FR-7 fleet view staged) |
+| [21-speed-observability](./21-speed-observability.md) | Active | Speed + timeline observability: `POOL_LINGER_SEC`, probe/bench fidelity (`PROBE_TIMEOUT_SEC`, 600s probe-FAIL, `BROKEN_MIN_CARDS`), claim-time cage preflight, `--busdir`, env-master candidates, claim stamp + `queue_wait_secs`, `swarm-ctl timeline`, `top_wall`, `LANE_MAX_<lane>`, longest-first claiming, FANOUT 6 (backlog 76-82) |
 
 ## Dependency Graph
 

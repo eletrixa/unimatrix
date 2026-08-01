@@ -606,3 +606,59 @@ diff-presence check for `.write` branches is the fix that covers both variants; 
     lane-unusable, unpriced tier. Next: doctor-probe the gemini lane with the current key,
     record the key's tier per docs/lane-economics.md, then re-smoke. (feedback:
     archive/2026-07-25-tokenomics-tok024-gemini-lane-instant-apierror.md)
+
+76. **Healthy lane benched 30 min by a 10s probe timeout at first spawn (MAJOR).** **DONE** via spec 21 FR-2/3/5 (2026-07-31; PROBE_TIMEOUT_SEC claude/codex 30s, probe-FAIL 600s + diag pointer, BROKEN_MIN_CARDS=2; doctor --live measured claude cold probe at 11.4s — would have FAILed the old 10s cap). pure064
+    (2026-07-29): the claude pre-claim live probe spawns the real CLI in a cold `env -i`
+    scratch-home under a hard `timeout 10`; a cold start >10s → rc 124 → generic
+    `limits/claude.broken` (1800s TTL, probe FAIL text discarded, zero run-*.jsonl) while
+    `claude -p ok` worked seconds before and after. Fix: PROBE_TIMEOUT_SEC (claude+codex 30s —
+    codex already has the hardcoded exception), probe FAIL text + child stderr into the marker
+    reason line, probe-fail writes the 600s short-TTL form, and BROKEN_MIN_CARDS=2 gates the
+    1800s bench on ≥2 distinct-card failures. → spec 21.
+    (feedback: archive/2026-07-29-brain-claude-lane-spawn-fastfail.md)
+
+77. **cwd-derived `--run` BUSDIR mis-derives under a persistent-shell orchestrator (MAJOR).** **DONE** via spec 21 FR-6/7 (2026-07-31; --busdir flag + git-toplevel ancestor hint).
+    bh065 (2026-07-30): subdir relaunch → "nothing to run" abort; a `cd` earlier in a compound
+    command → nested `.bus-bh065/specs/.bus-bh065` junk inside the live bus. The loud abort
+    guard caught both (working as designed). Fix: explicit `--busdir <path>` flag (slots into
+    the option loop before precedence resolution) + `_refuse_empty_run` hint names an existing
+    `.bus-<label>` at the git toplevel (suggest, never auto-prefer). → spec 21.
+    (feedback: archive/2026-07-30-brain-bh065-cwd-busdir-footgun.md)
+
+78. **env-master preflight ignores the house-standard secrets path (MINOR).** **DONE** via spec 21 FR-8 (2026-07-31; _env_master_path shared resolver + key-naming abort). bh065
+    (2026-07-30): launch aborted on unreadable `~/.config/unimatrix/env.master` although
+    `~/s/.env.master` (the box's documented standard since round-3) existed. Fix: single
+    `_env_master_path` helper used by both twin defaults (preflight + `_env_master_key`),
+    candidate order ENV_MASTER_FILE → XDG → `$HOME/s/.env.master`; abort names the needed
+    key(s) and prints a copy-paste export line. → spec 21.
+    (feedback: archive/2026-07-30-brain-bh065-env-master-default.md)
+
+79. **DONE** via spec 21 FR-1 (2026-07-31; POOL_LINGER_SEC — live smoke: late add served 12s after swarm-ctl add, zero relaunch). **Pool closes on drain; late adds need a full engine relaunch (MINOR feedback, MAJOR
+    wall-clock).** bh065: 4 invocations for one logical run; forensics show 24.5 min (60%) of
+    the 41-min run was idle bus between relaunches — 16.2 min of it card w5 sitting unclaimed
+    after invocation 1 closed. Fix: POOL_LINGER_SEC (default 0) — after drain the pool keeps
+    polling `queue/` for N seconds before closing; mid-run adds already work (claim loop
+    reglobs every tick). `add --serve` rejected (duplicates private spawn/finalize machinery,
+    escapes run.pgid/abort/sweep coverage). → spec 21.
+    (feedback: archive/2026-07-30-brain-bh065-midrun-add-after-close.md)
+
+80. **Cage-denial detected only after burning the worker (MAJOR).** **DONE** via spec 21 FR-9 (2026-07-31; claim-time .files-vs-cage preflight, instant park). bh065 f1: 180s + $0.41 of
+    glm work discarded at park class=cage-denied — the write list (`queue/<id>.write` +
+    `.files`) is known before spawn. Fix: path-prefix preflight at claim time; out-of-cage
+    write list parks instantly with class=cage-denied, no spawn. → spec 21. (source: bh065
+    bus forensics 2026-07-31, orchestrator-filed)
+
+81. **No per-card timeline; queue-wait unmeasurable (spec 08 FR-10 promotion) (MAJOR).** **DONE** via spec 21 FR-10/11/12 (2026-07-31; claim stamp + queue_wait_secs, swarm-ctl timeline — bh065 replay reproduces the 24.5-min idle forensics — top_wall in run-summary).
+    Nothing renders per-card queued→claimed→spawn→finalize durations, invocation-boundary
+    gaps, or critical path; claim time is recorded nowhere (claim-file mtime is
+    heartbeat-clobbered — spec 08 declared queue-wait a non-goal pending claim stamping).
+    Fix: `limits/<id>.claimed-at` stamp at claim + additive `queue_wait_secs`/`claim_ts`
+    ledger keys + read-only `swarm-ctl timeline` + `top_wall` top-3 sinks in run-summary.
+    → spec 21. (source: bh065 forensics — 60% idle was invisible until hand-reconstructed)
+
+82. **Parallelism knobs: per-lane caps + claim ordering + FANOUT default (MINOR).** **DONE** via spec 21 FR-13/14/15 (2026-07-31; LANE_MAX_<lane>, longest-job-first, FANOUT 6). No
+    per-lane in-flight cap exists (glm ceiling is prose-only; docs/larger-swarms.md R4
+    unbuilt); claim order is lexicographic glob; FANOUT baked default still 4 though buses
+    are namespaced and the skill advises ≥6. Fix: LANE_MAX_<lane> conf keys (capped lane
+    skipped, never wedges pool), longest-job-first by prompt byte size (`ls -S`), FANOUT
+    default 6. → spec 21. (source: recon 2026-07-31)

@@ -20,13 +20,26 @@ ORCH_TAKEOVER_MIN=20                   # heartbeat staleness (minutes) before sw
 MAX_ITERATIONS=10                     # /swarm-loop iteration cap
 BUDGET_USD=0                          # loop/run budget cap in USD; 0 = no cap; also gates fallback INTO kimi (real-PAYG) — spec 10
 PAYG_FALLBACK=warn                    # warn|allow|deny: gates a FALLBACK hop onto kimi (real-$) while BUDGET_USD=0 (uncapped) — spec 13 FR-4. warn = proceed + loud stderr + fbreason evidence (default); deny = route around kimi like any blocked lane; allow = today's behavior, silent
-FANOUT=4                              # job-pool concurrency ceiling
+FANOUT=6                              # job-pool concurrency ceiling (spec 21 FR-15: buses are per-run namespaced since spec 20, so 6 is the safe default; operating guidance says >=6)
 LEASE_MIN=15                          # stale-lease reclaim threshold, in minutes
 WORKER_TIMEOUT_SEC=300                # FR-12 wall-clock watchdog: kill a hung worker after this long
 MAX_LANE_RETRIES=3                    # consecutive unusable-answer retries per lane before failing over (parks when pinned/chain exhausted); bounds FR-6's retry-same-lane
 CAGE_DENY_MAX=0                       # spec 14 FR-1: read-class permission denials (Read/Glob/Grep/NotebookRead) a card may take before it PARKS as cage-denied instead of walking its chain into the same cage. A ceiling, not a toggle — raise it for a run that knowingly cages out a few reads; absurdly high is the opt-out. Bash denials are never counted (a write cage denies Bash by design)
 STAGGER_FIRST_SPAWN_SEC=10            # spec 04 amendment 2026-07-26 (backlog 20): same-lane auth-herd stagger — bound (seconds) a same-lane follower waits for the lane's FIRST worker to produce output before launching its own CLI. 0 = off. Cross-lane parallelism is never affected
+POOL_LINGER_SEC=0                     # spec 21 FR-1: seconds a DRAINED pool keeps polling queue/ before closing, so a late `swarm-ctl add` (dependent card, review/fix wave) is served by the same invocation instead of a full engine relaunch (bh065: 60% of a 41-min run was idle bus between relaunches). 0 = close on drain (default; keep 0 for swarm-loop, which relaunches per iteration by design)
+PROBE_TIMEOUT_SEC=                    # spec 21 FR-2: probe timeout override for ALL lanes. Empty = per-lane resolve: 30s claude/codex (cold env -i cage start), 10s the rest
+BROKEN_MIN_CARDS=2                    # spec 21 FR-5: distinct fast-failed CARDS before a lane earns the 1800s .broken bench; below the threshold the marker is the 600s short-TTL form (one card's burst is a data point, not a lane verdict)
 PROBE_AUTO=1                          # spec 13 FR-6 (backlog 58): event-fired auto live-probes — the lane's first card per run probes pre-claim (dead lane -> .broken before any spawn, card routes around instead of burning MAX_LANE_RETRIES); a first instant-error probes reactively. At most one probe per lane per run; existing .broken/.dead/.limited markers are never rewritten. 0 = off (doctor --live stays manual)
+
+# Per-lane in-flight ceilings (spec 21 FR-13). Empty (or <=0) = unlimited. A capped lane is
+# SKIPPED at claim time (lane_blocked semantics) — other cards/lanes fill the FANOUT slots, the
+# pool never wedges. Set one for a lane with a known concurrency ceiling (e.g. LANE_MAX_GLM=8).
+#LANE_MAX_CLAUDE=
+#LANE_MAX_CODEX=
+#LANE_MAX_GEMINI=
+#LANE_MAX_GLM=
+#LANE_MAX_GROK=
+#LANE_MAX_KIMI=
 
 # Per-lane watchdog overrides (spec 04 §Amendment 2026-07-25 FR-C). Empty/unset = fall back to
 # WORKER_TIMEOUT_SEC above; set one only for a lane that genuinely needs a different ceiling.

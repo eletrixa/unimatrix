@@ -377,7 +377,10 @@ _run_pool_once() {
   # OWN, refreshed by the loop above — without the ownership assertion the child run would refuse
   # its own parent's bus. ${RUN_LABEL:+--run} passes the label through per FR-5.
   # shellcheck disable=SC2086
-  BUSDIR="$BUSDIR" CONF="$CONF" FANOUT=1 UNIMATRIX_BUS_OWNER=1 \
+  # POOL_LINGER_SEC=0 forced (spec 21 review round): loop iterations relaunch by design — there
+  # is never a live pool for a late add to land in, so a conf-file linger would tax every
+  # iteration N seconds for zero benefit (same active-override doctrine as FANOUT=1 here).
+  BUSDIR="$BUSDIR" CONF="$CONF" FANOUT=1 UNIMATRIX_BUS_OWNER=1 POOL_LINGER_SEC=0 \
     "$SWARM_RUN" ${RUN_LABEL:+--run "$RUN_LABEL"} || true
   kill "$_hb_pid" 2>/dev/null || true
   wait "$_hb_pid" 2>/dev/null || true

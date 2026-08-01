@@ -23,6 +23,11 @@
 #   (GLM/codex/kimi/claude/gemini rate-limit + auth-death (.dead) signature detection — spec 10)
 # - spec-10 role-class primitives: dead_flag/lane_dead/lane_blocked, _lane_family/_judge_ok,
 #   review_chain_for, kimi_budget_ok/_kimi_spend_add, answer_unusable, _chain_tokens
+# - spec-21 speed/observability primitives: _env_master_path (shared env-master resolver:
+#   explicit > XDG > ~/s/.env.master), claim-stamp consumption in speed_row (additive
+#   claim_ts/queue_wait_secs row keys), run_summary's additive top_wall (top-3 wall sinks),
+#   POOL_LINGER_SEC/PROBE_TIMEOUT_SEC/BROKEN_MIN_CARDS/LANE_MAX_<lane> conf keys, FANOUT
+#   baked default 6
 # - spec-11 succession primitives: orch_seat/orch_degraded (busdir/orch-seat acting-seat read),
 #   seat-aware _judge_ok/review_chain_for/verify_lane_for (FR-S3 role exclusion), and speed_row's
 #   degraded:true field under a non-fable seat (FR-S4)
@@ -101,6 +106,7 @@ if env -C / true 2>/dev/null; then ENV_HAS_C=1; fi
 # reads as "claim vanished" and can spin an infinite worker respawn loop.
 _stat_devino() { stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null; }
 _stat_mtime()  { stat -c %Y "$1"     2>/dev/null || stat -f %m    "$1" 2>/dev/null; }
+_stat_birth()  { stat -c %W "$1" 2>/dev/null || echo 0; }
 
 # bus_init <busdir> — create the file-bus directory tree.
 bus_init() {
@@ -135,7 +141,9 @@ CONF_KEYS=(PLAN ORCHESTRATOR REVIEW EXEC_CHAIN MAX_ITERATIONS BUDGET_USD FANOUT 
            PLAN_CHAIN ORCH_CHAIN ORCH_TAKEOVER_MIN FEEDBACK_AUTO PAYG_FALLBACK
            GLM_MAX_THINKING_TOKENS KIMI_MAX_THINKING_TOKENS GROK_EFFORT CAGE_DENY_MAX
            STAGGER_FIRST_SPAWN_SEC PROBE_AUTO
-           TIMEOUT_CLAUDE TIMEOUT_CODEX TIMEOUT_GEMINI TIMEOUT_GLM TIMEOUT_GROK TIMEOUT_KIMI)
+           TIMEOUT_CLAUDE TIMEOUT_CODEX TIMEOUT_GEMINI TIMEOUT_GLM TIMEOUT_GROK TIMEOUT_KIMI
+           POOL_LINGER_SEC PROBE_TIMEOUT_SEC BROKEN_MIN_CARDS
+           LANE_MAX_CLAUDE LANE_MAX_CODEX LANE_MAX_GEMINI LANE_MAX_GLM LANE_MAX_GROK LANE_MAX_KIMI)
 
 conf_load() {
   local conffile="$1"
@@ -155,7 +163,9 @@ conf_load() {
   : "${EXEC_CHAIN:=claude:haiku codex:default}"
   : "${MAX_ITERATIONS:=10}"
   : "${BUDGET_USD:=0}"
-  : "${FANOUT:=4}"
+  # spec 21 FR-15: 6, not 4 — buses are per-run namespaced (spec 20) so wide pools no longer
+  # collide, and operating guidance has said FANOUT>=6 since round 3.
+  : "${FANOUT:=6}"
   : "${LEASE_MIN:=15}"
   : "${WORKER_TIMEOUT_SEC:=300}"
   : "${MAX_LANE_RETRIES:=3}"
@@ -212,6 +222,27 @@ conf_load() {
   : "${TIMEOUT_GLM=}"
   : "${TIMEOUT_GROK=}"
   : "${TIMEOUT_KIMI=}"
+  # spec 21 FR-1: seconds a DRAINED pool keeps polling queue/ before closing, so late adds
+  # (dependent cards, review/fix waves) are served by the same invocation instead of a full
+  # relaunch (bh065: 60% of a 41-min run was idle bus between relaunches). 0 = close on drain,
+  # today's exact behavior — and the right value for swarm-loop iterations, which relaunch by
+  # design.
+  : "${POOL_LINGER_SEC:=0}"
+  # spec 21 FR-2: probe timeout override, all lanes. Empty = per-lane resolve at the probe site
+  # (30s claude/codex cold-start, 10s the rest). `=` not `:=`: empty IS the value.
+  : "${PROBE_TIMEOUT_SEC=}"
+  # spec 21 FR-5: distinct fast-failed CARDS required before a lane earns the 1800s bench;
+  # below the threshold the marker is the 600s short-TTL form (one card's burst is one data
+  # point, not a lane verdict — pure064: a healthy lane benched 30 min on one probe timeout).
+  : "${BROKEN_MIN_CARDS:=2}"
+  # spec 21 FR-13: per-lane in-flight ceilings, counted against claimed/ at claim time. Empty
+  # (or <=0) = unlimited; a capped lane is SKIPPED (lane_blocked semantics), never a pool wedge.
+  : "${LANE_MAX_CLAUDE=}"
+  : "${LANE_MAX_CODEX=}"
+  : "${LANE_MAX_GEMINI=}"
+  : "${LANE_MAX_GLM=}"
+  : "${LANE_MAX_GROK=}"
+  : "${LANE_MAX_KIMI=}"
 
   if [[ -f "$conffile" ]]; then
     # shellcheck source=/dev/null
@@ -333,6 +364,29 @@ conf_load() {
     return 1
   fi
 
+  # spec 21 keys (codex review 2026-08-01): all four families reach bash arithmetic — garbage or
+  # leading-zero (octal) values would hang the linger comparison or abort the pool subshell, the
+  # exact silent-disarm class the validations above exist for. POOL_LINGER_SEC nonneg (0 = its
+  # default, close on drain); BROKEN_MIN_CARDS positive; PROBE_TIMEOUT_SEC and LANE_MAX_* empty
+  # (= per-lane default / unlimited) or a positive integer.
+  if [[ ! "$POOL_LINGER_SEC" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    echo "conf_load: POOL_LINGER_SEC must be a nonnegative integer (got '$POOL_LINGER_SEC')" >&2
+    return 1
+  fi
+  if [[ ! "$BROKEN_MIN_CARDS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "conf_load: BROKEN_MIN_CARDS must be a positive integer (got '$BROKEN_MIN_CARDS')" >&2
+    return 1
+  fi
+  local s21key
+  for s21key in PROBE_TIMEOUT_SEC LANE_MAX_CLAUDE LANE_MAX_CODEX LANE_MAX_GEMINI LANE_MAX_GLM \
+                LANE_MAX_GROK LANE_MAX_KIMI; do
+    [[ -z "${!s21key}" ]] && continue
+    if [[ ! "${!s21key}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "conf_load: $s21key must be empty or a positive integer (got '${!s21key}')" >&2
+      return 1
+    fi
+  done
+
   # spec 13 FR-4: PAYG_FALLBACK is a closed enum (warn|allow|deny) — same loud die-at-load
   # contract as every other config guard above, a bad value must never reach a live run.
   case "$PAYG_FALLBACK" in
@@ -351,13 +405,24 @@ conf_load() {
 # Contract: <id> is ours and dot-free ([a-z0-9-]+); <worker> may contain dots (glm-5.2, w1.codex).
 claim() {
   local busdir="$1" id="$2" worker="$3"
-  local src="$busdir/queue/$id.prompt"
+  local src="$busdir/queue/$id.prompt" dst="$busdir/claimed/$id.$worker"
   [[ -e "$busdir/PAUSE" ]] && return 2
-  mv "$src" "$busdir/claimed/$id.$worker" 2>/dev/null && return 0
-  # Lost race: source already gone (ENOENT) — that failure IS the signal, no error spam.
-  [[ -e "$src" ]] || return 1
-  # Anything else (perms, bad busdir, disk full, ...) is a real error — let it surface.
-  mv "$src" "$busdir/claimed/$id.$worker"
+  if ! mv "$src" "$dst" 2>/dev/null; then
+    # Lost race: source already gone (ENOENT) — that failure IS the signal, no error spam.
+    [[ -e "$src" ]] || return 1
+    # Anything else (perms, bad busdir, disk full, ...) is a real error — let it surface.
+    mv "$src" "$dst"
+  fi
+  # FR-14 fence (spec 01, amended 2026-08-01): re-mint the claim file's inode. mv-based
+  # claim/reap/re-claim cycles PRESERVE the inode, so a raw re-claim handed a reaped-but-alive
+  # stale worker a still-matching dev:inode token — the exact double-finalize the fence exists
+  # to stop. Copy-then-rename-over gives every claim a unique token; the dot-name keeps the
+  # tmp file out of claimed/ globs (gate math, lane caps) if a crash strands it. Residual
+  # race: a stale finalize landing inside this two-syscall window still sees the old inode —
+  # microseconds, vs the whole worker runtime before this fix.
+  local mint="$busdir/claimed/.$id.$worker.mint.$$"
+  { cp "$dst" "$mint" 2>/dev/null && mv -f "$mint" "$dst" 2>/dev/null; } || { rm -f "$mint"; return 1; }
+  return 0
 }
 
 # _heartbeat_live <heartbeat-file> — spec 20 FR-3/FR-4: rc 0 iff the spec 11 orchestrator
@@ -857,12 +922,34 @@ _stagger_first_spawn() {
   return 0
 }
 
+# _env_master_path — spec 21 FR-8 (backlog 78): THE env-master path resolver, shared by
+# _env_master_key and env_master_preflight so the twin defaults can never disagree (bh065: the
+# preflight aborted on the XDG default while the box's documented secrets master sat readable at
+# ~/s/.env.master). Resolution order:
+#   1. explicit $ENV_MASTER_FILE — returned VERBATIM even when unreadable (an explicit override is
+#      authoritative; silently falling back would hand a run a secrets file the operator did not
+#      name, which is worse than a loud abort);
+#   2. $XDG_CONFIG_HOME/unimatrix/env.master (the baked default), if readable;
+#   3. $HOME/s/.env.master (the house-standard secrets mirror), if readable;
+#   4. the XDG default path again — unreadable, but the right path for an abort message to name.
+_env_master_path() {
+  if [[ -n "${ENV_MASTER_FILE:-}" ]]; then
+    printf '%s' "$ENV_MASTER_FILE"
+    return 0
+  fi
+  local xdg="${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix/env.master"
+  if [[ -r "$xdg" ]]; then printf '%s' "$xdg"; return 0; fi
+  if [[ -r "$HOME/s/.env.master" ]]; then printf '%s' "$HOME/s/.env.master"; return 0; fi
+  printf '%s' "$xdg"
+}
+
 # _env_master_key <NAME> — grep one key out of the env-master file into stdout (least-privilege;
 # never `source` the whole file — a KEY=VALUE secrets dump often isn't safely bash-sourceable, and
-# a worker needs only its own key). Path is overridable via $ENV_MASTER_FILE so tests never touch
-# the real secrets file. rc 1 (loud) if missing.
+# a worker needs only its own key). Path resolution: _env_master_path (spec 21 FR-8) — explicit
+# $ENV_MASTER_FILE, else the first readable candidate. rc 1 (loud) if missing.
 _env_master_key() {
-  local name="$1" f="${ENV_MASTER_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix/env.master}" val
+  local name="$1" f val
+  f="$(_env_master_path)"
   if [[ ! -f "$f" ]]; then
     echo "_env_master_key: $f not found (need $name)" >&2
     return 1
@@ -923,16 +1010,33 @@ env_master_preflight() {
     bare+=("${lane%%:*}")
   done
 
-  local b needs_key=0
+  local b
+  local -a needkeys=()
   for b in "${bare[@]}"; do
-    case "$b" in gemini | glm | kimi) needs_key=1; break ;; esac
+    case "$b" in
+      gemini) needkeys+=(GEMINI_API_KEY) ;;
+      glm) needkeys+=(Z_AI_CODING_KEY) ;;
+      kimi) needkeys+=(MOONSHOT_API_KEY) ;;
+    esac
   done
-  (( needs_key )) || return 0
+  (( ${#needkeys[@]} > 0 )) || return 0
 
-  local envf="${ENV_MASTER_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix/env.master}"
+  local envf
+  envf="$(_env_master_path)"
   if [[ ! -r "$envf" ]]; then
+    # spec 21 FR-8: name the key(s) the tripping lane(s) actually grep for — the operator's next
+    # move is "which file has THESE" — and print a copy-paste export line, pointed at a readable
+    # candidate elsewhere when one exists (the explicit-override-unreadable case: _env_master_path
+    # honored $ENV_MASTER_FILE verbatim, but a usable candidate may still sit at a default path).
+    local keylist
+    keylist="$(printf '%s\n' "${needkeys[@]}" | sort -u | paste -sd' ' -)"
     echo "swarm: this run's lane set needs an env-key lane (gemini/glm/kimi) but the env-master file is unreadable: $envf" >&2
-    echo "swarm: fix: export ENV_MASTER_FILE=<your secrets file>" >&2
+    echo "swarm: the lane(s) need: $keylist" >&2
+    local cand="" c
+    for c in "${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix/env.master" "$HOME/s/.env.master"; do
+      [[ -r "$c" && "$c" != "$envf" ]] && { cand="$c"; break; }
+    done
+    echo "swarm: fix: export ENV_MASTER_FILE=${cand:-<your secrets file>}" >&2
     return 1
   fi
   return 0
@@ -2500,6 +2604,25 @@ speed_row() {
     requested="${fbline#* }"
     rm -f "$fbfile"
   fi
+  # spec 21 FR-10 (spec 08 FR-10 promotion): read the claim stamp; delete it ONLY when THIS row
+  # is the claim's TERMINAL row (review round 2026-07-31: a pinned terminal failure writes TWO
+  # rows for one claim — the failed attempt, then _park_card's parked row — and
+  # consume-on-first-read left the terminal row, the one timeline keeps, stamp-less; and the done
+  # path calls _archive_and_release BEFORE its own speed_row, so deletion cannot live there
+  # either). Non-terminal rows (retry/timeout attempts) read without deleting; a re-claim
+  # overwrites with `>`. Stamp is one _marker_line whose ISO field is the claim time and whose
+  # text carries qws=<queue-wait-seconds>, both computed AT claim (swarm-run.sh _try_claim_one) —
+  # computing here would race the claim file's archival.
+  local stampf="$busdir/limits/$id.claimed-at" claim_ts="" queue_wait=null
+  if [[ -f "$stampf" ]]; then
+    local sline
+    sline="$(<"$stampf")"
+    claim_ts="${sline%% *}"
+    [[ "$sline" =~ qws=([0-9]+) ]] && queue_wait="${BASH_REMATCH[1]}"
+    case "$outcome" in
+      done | timeout-salvaged | parked) rm -f "$stampf" ;;
+    esac
+  fi
   local log="$busdir/run-$id.jsonl"
   local now spawn wall=null sm usage='{}'
   now=$(date +%s)
@@ -2592,14 +2715,17 @@ speed_row() {
     --arg served_model "$sm" --arg outcome "$outcome" \
     --arg fallback_reason "$fallback_reason" --arg billing "$billing" \
     --arg verify_lane "$verify_lane" --arg class "$class" \
+    --arg claim_ts "$claim_ts" \
     --argjson wall "$wall" --argjson wrc "${wrc:-null}" --argjson pinned "$pinned" \
-    --argjson degraded "$degraded" \
+    --argjson degraded "$degraded" --argjson queue_wait "$queue_wait" \
     --argjson u "$usage" \
     '{ ts: $ts, run: $run, id: $id, requested: $requested,
        served_lane: (if $outcome == "parked" then null else $served_lane end),
        served_model: (if $served_model == "" then null else $served_model end),
        outcome: $outcome, wrc: $wrc, pinned: ($pinned == 1), wall_secs: $wall,
        billing: $billing }
+     + (if $claim_ts == "" then {} else { claim_ts: $claim_ts } end)
+     + (if $queue_wait == null then {} else { queue_wait_secs: $queue_wait } end)
      + (if $fallback_reason == "" then {} else { fallback_reason: $fallback_reason } end)
      + (if $verify_lane == "" then {} else { verify_lane: $verify_lane } end)
      + (if $degraded then { degraded: true } else {} end)
@@ -2714,9 +2840,13 @@ run_summary() {
     ([$rows[].ts] | min) as $mints |
     (if $mints then (now - ($mints | fromdateiso8601)) else 0 end) as $wall |
     (([$rows[] | (.cost_usd // 0)] | add) // 0) as $cost_usd |
+    # spec 21 FR-12: top 3 wall-clock sinks, additive key (spec 18 payload escape valve — no
+    # contract version bump). Last-row-per-id, so a retried card is judged by its final attempt.
+    ([$last[] | select(.wall_secs != null)] | sort_by(-.wall_secs) | .[0:3]
+     | map({ id, lane: (.served_lane // .requested), wall_secs, outcome })) as $top_wall |
     { type: "run-summary", ts: $ts, run: $run, mode: $mode,
       branches: $branches, done_n: $done_n, parked_n: $parked_n,
-      fallback_hops: $fallback_hops,
+      fallback_hops: $fallback_hops, top_wall: $top_wall,
       lanes_limited: $lanes_limited, lanes_dead: $lanes_dead,
       wall_secs: $wall, cost_usd: $cost_usd, stderr_n: $stderr_n,
       session_id: (if $session_id == "" then null else $session_id end),

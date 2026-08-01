@@ -204,3 +204,5 @@ it. Probes remain non-billable (event-fired, not cards); only probes that can bi
    ledger via existing `doctor-probe (<lane>)` entry.
 4. A reactive probe on a lane that already carries a `.broken`/`.dead`/`.limited` marker is a
    no-op — probes never re-write, refresh, or clear existing markers.
+
+**Amendment pointer 2026-07-31 → [spec 21](./21-speed-observability.md):** PROBE_TIMEOUT_SEC (claude/codex 30s cold-start), probe-FAIL 600s TTL + real failure text in the `.broken` reason, BROKEN_MIN_CARDS distinct-card bench threshold, env-master candidate paths (`_env_master_path`).

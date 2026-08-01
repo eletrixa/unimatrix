@@ -5,6 +5,39 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), versioned with 
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-01
+
+### What's new (for humans)
+- **The swarm no longer goes idle between waves**: finished pools can wait around for
+  late-added tasks instead of forcing you to relaunch the whole engine — on a real run this
+  idle waiting was 60% of the total time.
+- **A healthy AI lane can't be benched for 30 minutes by one slow health check anymore** —
+  checks get realistic time budgets, a failed check is a short 10-minute flag with the real
+  error attached, and a long bench now needs two separate tasks to fail.
+- **You can now see exactly where a run's time went**: a new `timeline` command shows each
+  task's waiting time, work time, retries and pauses, plus the gaps and the slowest task —
+  no more detective work with file timestamps.
+- **Tasks that were doomed to fail their folder rules are stopped instantly** at hand-out,
+  before any AI time or money is spent.
+- **Launching from the wrong folder is now recoverable in one step** — a new `--busdir`
+  flag pins the workspace explicitly, and error messages point at the workspace you
+  probably meant, name the missing key, and print the exact fix line to copy-paste.
+
+### Added
+- **`POOL_LINGER_SEC`** (spec 21 FR-1, backlog 79) — a drained pool keeps polling `queue/` for N seconds before closing, so late adds (dependent cards, review/fix waves) are served by the same invocation instead of a full engine relaunch. Default 0 = today's behavior; `swarm-loop` force-overrides 0 (relaunch-per-iteration is its design). bh065 evidence: 60% of a 41-min run was idle bus between relaunches; live smoke: late add served 12s after `swarm-ctl add`.
+- **`--busdir <path>` flag** (spec 21 FR-6, backlog 77) — pins the bus by path with env-var authority, for orchestrators whose shell cwd cannot be trusted; the empty-run abort now also names an existing `.bus-<label>` at the git toplevel as a hint (FR-7). `--help`/`-h` now actually print usage (and exit 0).
+- **`PROBE_TIMEOUT_SEC` + probe/bench fidelity** (spec 21 FR-2..5, backlog 76) — claude joins codex at a 30s cold-start probe cap; a probe FAIL benches 600s (not 1800s) with the probe's failure text + a `diag=limits/<lane>.probe-stderr` pointer; the finalize bench points at `run-<id>.jsonl.stderr`; **`BROKEN_MIN_CARDS`** (default 2) gates the 1800s bench on distinct-card evidence, and the `.failcards` counter resets on the lane's next successful finalize (recovery clears evidence, like `.broken`).
+- **Claim-time cage preflight** (spec 21 FR-9, backlog 80) — a write card whose `.files` manifest resolves outside its cage parks instantly as `cage-denied`, before any worker spend.
+- **Claim stamp + `queue_wait_secs`** (spec 21 FR-10; spec 08 FR-10 promoted) — every claim writes `limits/<id>.claimed-at`; speedwars rows gain additive `claim_ts` + `queue_wait_secs` keys. Only the claim's terminal row (done/timeout-salvaged/parked) consumes the stamp, so a pinned card's failed-attempt AND parked rows both carry the keys.
+- **`swarm-ctl timeline <run|busdir>`** (spec 21 FR-11, backlog 81) — read-only per-card timeline (queue-wait, serve, attempts, lane walks, park reasons) plus run footer: total span, idle invocation gaps, critical-path card.
+- **`top_wall` in run-summary rows** (spec 21 FR-12) — top-3 wall-clock sinks, surfaced by `swarm-ctl postmortem` with no reader change.
+- **`LANE_MAX_<LANE>` per-lane in-flight caps** (spec 21 FR-13, backlog 82) — a capped lane is skipped at claim (never wedges the pool).
+
+### Changed
+- **Longest-job-first claiming** (spec 21 FR-14) — `queue/*.prompt` is claimed in descending byte-size order (long cards stop becoming the accidental critical path).
+- **`FANOUT` baked default 4 → 6** (spec 21 FR-15) — buses are per-run namespaced since spec 20.
+- **env-master resolution** (spec 21 FR-8, backlog 78) — one `_env_master_path` resolver for preflight and per-key grep: explicit `ENV_MASTER_FILE`, else `$XDG_CONFIG_HOME/unimatrix/env.master`, else `$HOME/s/.env.master`; the preflight abort names the needed key(s) and prints a copy-paste export line.
+
 ## [1.4.0] - 2026-07-29
 
 ### What's new (for humans)

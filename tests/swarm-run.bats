@@ -659,7 +659,9 @@ limit_active_probe() {
 @test "gate math: cancel one mid-run, add one mid-run — run completes with the right survivors" {
   _write_conf "claude:opus" 1 15
   _fake FAKE_CLAUDE_DELAY 1
-  _enqueue e1 "keep-1"
+  # e1 is deliberately the longest prompt: spec 21 longest-job-first claiming takes it first,
+  # so e2 verifiably sits in queue/ for the mid-run cancel below (a shorter e1 made this race).
+  _enqueue e1 "keep-1-longest-prompt-so-longest-first-claiming-takes-this-card-first"
   _enqueue e2 "cancel-me"
   _enqueue e3 "keep-3"
 
@@ -905,6 +907,12 @@ EOF
   BG_PIDS+=("$!")
 
   _poll 15 test -e "$BUS/claimed/f1.claude:opus"
+  # Wait for the fake's once-marker (mkdir'd at slow-arm START, before its 4s sleep) — proof the
+  # original worker actually READ the prompt and is now mid-sleep. Stealing on the claim file
+  # alone raced the worker's own prompt read (claim→spawn latency): a too-early steal killed the
+  # original with "no claim file" BEFORE it consumed the slow-once arm, handing the retry the
+  # "stale answer" as its legitimate result (2026-08-01 flake).
+  _poll 15 test -d "$BATS_TEST_TMPDIR/f1-once"
   # "Steal" the lease exactly the way reap() would (mv claimed -> queue) while the original
   # (still sleeping its bounded 4s) is genuinely still running as a real process.
   mv "$BUS/claimed/f1.claude:opus" "$BUS/queue/f1.prompt"

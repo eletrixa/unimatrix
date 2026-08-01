@@ -45,7 +45,8 @@ teardown() {
 @test "conf_load: baked default wins when unset and no file" {
   unset FANOUT
   conf_load "$BATS_TEST_TMPDIR/nonexistent.conf"
-  [ "$FANOUT" = "4" ]
+  # spec 21 FR-15: 6 since 2026-07-31 (was 4 pre-namespacing)
+  [ "$FANOUT" = "6" ]
 }
 
 @test "conf_load: EXEC_CHAIN default is the two-lane fallback chain" {

@@ -657,3 +657,5 @@ The 2026-07-25 shared-cage findings ratify the following:
 - **Acceptance:** bats — two cards share a cage, card A writes a file, card B writes nothing but narrates: gate passes A, fails B with the W3D1 signature named in the failure reason.
 
 **Amendment 2026-07-29:** on the non-journal lanes (grok/codex/gemini — streams carry no tool_use records even on honest write cards, verified 2026-07-28), a write card whose cage is shared (live sidecar or finished write-*.txt sibling) and which carries no queue/<id>.files manifest is rejected at the diff gate (surfaces as false-done, ordinary retry/chain-walk) instead of whole-cage-swept — FR-8's stated ceiling is closed by requiring the FR-2 manifest there; the reject message names the fix.
+
+**Amendment pointer 2026-07-31 → [spec 21](./21-speed-observability.md):** `.files` manifest checked at CLAIM time — out-of-cage write list parks instantly as `class=cage-denied` before any spawn.

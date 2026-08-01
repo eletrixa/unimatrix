@@ -1,6 +1,6 @@
 ---
 name: unimatrix
-version: 1.4.0
+version: 1.5.0
 description: Plan AND operate unimatrix swarm runs — decomposition, lane assignment, bus setup, gates, monitoring, troubleshooting, evidence, and the cross-repo feedback drop-box. Use when Fable is about to orchestrate work through the unimatrix file-bus (/swarm, /swarm-loop, swarm-run.sh, write-capable lanes, cross-model review), when the user says "use unimatrix", "swarm this", "plan the swarm", "check the swarm", when operating or debugging a live run, or when any agent in any repo wants to send unimatrix feedback. Self-improving — append lessons after every run.
 ---
 
@@ -98,9 +98,18 @@ Recalibrate this table from speedwars rows, never on vibes.
   loop children bypass via `UNIMATRIX_BUS_OWNER=1` (already wired). A run whose bus has zero
   queued/claimed/done cards now aborts loudly ("nothing to run") instead of closing clean. Two
   runs on one bus = renumber collisions, verify noise, cleanup cards (aiact-054 + brain-053 both
-  paid this tax).
-- Env per run: `FANOUT` (≥6 once bus is namespaced), `WORKER_TIMEOUT_SEC` ≥900 for
-  write/TDD cards (600 killed real work), `MON_AUTOOPEN=0` when unattended.
+  paid this tax). **Launch line = one standalone command with NO `cd` earlier in the compound,
+  from an asserted repo root** (bh065: two mis-derivations under a persistent shell) — or pin the
+  bus explicitly with `--busdir <path>` (spec 21, env-var authority); the empty-run abort now
+  names an existing `.bus-<label>` at the git toplevel when your cwd drifted.
+- Env per run: `FANOUT` (baked default 6 since spec 21; 8 for wide waves), `WORKER_TIMEOUT_SEC`
+  ≥900 for write/TDD cards (600 killed real work), `MON_AUTOOPEN=0` when unattended, and
+  **`POOL_LINGER_SEC` (spec 21) when the plan has late/dependent cards or review/fix waves** — a
+  drained pool lingers N seconds re-scanning queue/, so a `swarm-ctl add` lands in the SAME
+  invocation (live-proven: late card served 12s after add; bh065 paid 16.2 idle minutes for the
+  same shape). Keep it 0/unset for swarm-loop (relaunch-per-iteration is the loop's design).
+  Per-lane in-flight ceilings: `LANE_MAX_<LANE>` (e.g. `LANE_MAX_GLM=8`) — capped lane is
+  skipped, never wedges the pool.
 - Write cards: `<id>.write` sidecar = target dir. Before parking a timed-out write
   card, **diff-check the target first** — the work may be complete on disk
   (false-timeout class); salvage beats re-run.
@@ -116,11 +125,20 @@ Recalibrate this table from speedwars rows, never on vibes.
 ## 4. Gates + review wave
 
 - Orchestrator gate between waves: run the tests yourself; never trust "done" markers.
+- **Turbo-cached monorepos: verification runs use `--force` (or `TURBO_FORCE=1`)** — a cache
+  replay is not a verification (pure064: stale 17/17 green replayed to the gate seat).
 - Verify wave: scope the judge prompt to **this card's diff only** (multi-card trees
   produce verify noise otherwise). Judge ≠ executor is absolute.
 - Cross-model review of a build: one read-only card per reviewer lane over the same
   diff + specs; findings come back as structured lists; Fable adjudicates, fix wave
   applies ALL accepted findings, re-test, re-sweep.
+- **Shard review cards by file-set** (existing `--files` sharding): one monolithic review card
+  bounds its whole wave (bh065: r2 at 553s WAS the 9.2-min invocation); 2-3 parallel shards cap
+  review wall at the slowest shard. `swarm-ctl timeline <run>` shows the critical-path card.
+- **Before spawning ANY session-side agent wave: note the account-limit reset time and
+  pre-authorize the salvage/respawn plan** (per-partition salvage checklist + fresh-respawn
+  briefs — never resume killed agents). A limit kills all session agents at once mid-partition
+  (pure064); recovery must be mechanical, not improvised.
 
 ## 5. Evidence (non-negotiable, before "done")
 
@@ -178,6 +196,9 @@ chain; grok-first recommended on a fully-authed box, prose pins claude:sonnet) �
 (docker for unattended) · `MON_PORT`/`MON_AUTOOPEN` · `GLM_MAX_THINKING_TOKENS`/
 `KIMI_MAX_THINKING_TOKENS` (thinking-flood caps) · `GROK_EFFORT` · `PROBE_AUTO` (spec 13 FR-6
 auto live-probes, default 1) · `STAGGER_FIRST_SPAWN_SEC` (auth-herd stagger, default 10) ·
+spec 21: `POOL_LINGER_SEC` (drain linger, default 0) · `PROBE_TIMEOUT_SEC` (empty = 30s
+claude/codex, 10s rest) · `BROKEN_MIN_CARDS` (1800s-bench threshold, default 2) ·
+`LANE_MAX_<LANE>` (per-lane in-flight caps, empty = unlimited) ·
 spec 11: `PLAN_CHAIN`/
 `ORCH_CHAIN`/`ORCH_TAKEOVER_MIN` (succession). Precedence: env > swarm.conf > baked default.
 
@@ -204,6 +225,7 @@ Bus MUST be a local POSIX fs (ext4) — never 9p/drvfs/NFS. One JSONL record = o
 tmux -L swarm attach -r -t mon        # read-only tmux cockpit (board/firehose/cost)
 # web cockpit: http://localhost:4747 (Ground Control; MON_AUTOOPEN=1 ensures it on first swarm)
 src/swarm-ctl status                  # gate count + limit flags
+src/swarm-ctl timeline <run|busdir>   # per-card queue-wait/serve/attempts/lane-walks/parks + span, idle invocation gaps, critical path (spec 21)
 src/swarm-ctl pause | resume          # block/allow new claims
 src/swarm-ctl kill <id> [--cancel] · nudge <id> [hint] · cancel <id> · abort
 src/swarm-ctl pause-worker <id> · resume-worker <id>     # SIGSTOP/SIGCONT freeze
@@ -666,3 +688,67 @@ Standing rules:
   empty-sidecar refusal + write-target-empty instant park (no 120s wait), swarm-ctl lint-specs
   preflight, empty-run loud abort, --run now derives at the caller's cwd (spec 20 amendment). Kimi
   stays dead until Moonshot top-up (operator action).
+- **2026-07-29 pure064 (brain plan 064, first GLM-primary brain run, 12-card single collapsed wave):**
+  (a) Collapsing dependency-free "waves" onto wave-0 PINNED literal contracts held at 12 cards —
+  zero clarification round-trips, zero same-file collisions, ~4 mechanical seam fixes at the gate
+  (normal). Pin MAJOR-version library idioms into the contracts too: a zod-3 `z.record(one-arg)`
+  pin on a zod-4 repo cost the only shared gate round; the contract author owns dependency-major
+  drift, not the workers. (b) claude lane can fast-fail at FIRST SPAWN under the herd while
+  demonstrably healthy (ping green both sides, zero run streams, 30-min TTL bench) — clear marker
+  + nudge; probe-cap feedback filed. (c) Account session limit killed ALL parallel session-side
+  fix agents mid-partition at once: salvage-first per partition (grep landed markers), then FRESH
+  respawns with salvage-aware briefs — never resume the killed agents; pre-authorize the resume
+  plan (reset time + per-partition salvage checklist) BEFORE spawning any session-side wave.
+  (d) Verify wave on a shared-cage bus after gate typechecks: ONE gitignored tsconfig.tsbuildinfo
+  false-refuted 12/12 verdicts — adjudicate by class, and exclude gitignored artifacts from
+  diff-gate views (feedback filed). (e) Review-panel geometry (codex diff + gate-RUNNER +
+  structural-miss(opus) + domain(fairness/legal) + design-judge with authenticated Lane-A) produced
+  4 disjoint catch sets incl. a 3-seat-convergent legal CRIT the green suite could never see
+  (client-side-only masking of a today-snapshot flag); the domain-specialist seat earns a standing
+  slot on any legally-sensitive board. (f) Turbo monorepo verification runs MUST `--force` — a
+  shared-worktree cache replayed stale 17/17 green to the gate seat. (g) Server-side redaction >
+  display-layer masking, always: one guard where all four consumers route through (fold/assemble)
+  closed API+CSV+drawer+sort leaks that four display patches would have chased forever.
+- **2026-07-30 bh065 (brain, plan 065 bet-health):** (a) glm's weak axis is HAND-MATH: two of
+  its test cards asserted arithmetic its own comments visibly flailed on (a CRITICAL wrong band
+  in a "hand-verified" fixture, a boundary suite whose fixtures hit no boundary, mixed-up
+  dim-code mappings). Contract-pinned CODE ports came back byte-faithful — the numbers did not.
+  New rule of thumb: any glm card whose deliverable asserts computed constants gets an
+  orchestrator re-derivation pass BEFORE the review wave. (b) codex earned its review-default
+  seat twice: caught a semantic purity break (hoist silently switched post-reclassify tasks to
+  pre-reclassify) that typecheck, tests, AND the orchestrator gate all missed, and caught the
+  dead Nick-Walker exemption behind an inert feature gate. Review cards that pin "compare against
+  the reference implementation line-by-line" outperform generic "review this diff" prompts.
+  (c) One logical run took FOUR engine invocations (pool closes on drain; late/dependent cards +
+  review wave + fix wave each need a relaunch) — plan invocations as named waves up front; it is
+  the intended shape, not a failure. (d) cwd-derived `--run` BUSDIR mis-derived twice under a
+  persistent-shell orchestrator (subdir relaunch + a `cd` earlier in a compound command → nested
+  junk bus). The loud abort guard caught both. Launch line must be a standalone command with no
+  cd, from an asserted repo root. (e) Per-test 5s bun timeouts under full-fanout swarm CPU load
+  perfectly mimic real regressions in slow golden-parity suites — before diagnosing a "failure"
+  in a >5s test during a live swarm, rerun with `--timeout 20000` on a quiet box. (f) Fixture
+  fallout from a stricter shared Zod schema (required-nullable keys) lands in files OUTSIDE any
+  card's write list — budget an orchestrator fixture-sweep at gate 1 as a standing line item
+  (~6 files here), or the wave-1 "done" state reads greener than the tree actually is.
+- **2026-07-31 spdobs (spec-21 speed/observability wave — unimatrix builds unimatrix, RED via swarm):**
+  (a) Timeline forensics BEFORE planning paid for the whole wave: hand-reconstructing bh065's
+  mtimes showed 60% of a 41-min run was idle bus between engine relaunches — the fix priority
+  (POOL_LINGER_SEC first, probe caps second) fell straight out of the numbers, and the new
+  `swarm-ctl timeline` now reproduces that forensics in one verb (bh065 replay: 3 gaps, 1469s).
+  (b) RED-wave dogfood shape that went 8/8 first-serve clean on glm (first clean glm wave on
+  record): one bats FILE per card (disjoint writes), FR text pinned verbatim, harness idioms
+  named by exemplar file, "you cannot run bats — hand-trace" + "helpers echo one value, diag to
+  >&2" pinned from seed. A test card even found a real gap on its own (--help was never wired)
+  and encoded it. (c) NEW doctrine collision class: a spec FR I wrote demanded stderr content in
+  a limits/ marker; spec 14 FR-7 markers are scrub-by-construction (quoted into tracked feedback
+  stubs) — the codebase rule beat the fresh spec, amended at GREEN to diag-POINTER files
+  (limits/<lane>.probe-stderr). When a new FR touches marker/ledger text, check the scrub
+  doctrine at SPEC time, not GREEN time. (d) The pure064 probe incident root-caused: the claude
+  probe spawns the real CLI in a cold `env -i` cage under `timeout 10` — measured 11.4s on a
+  healthy lane (doctor --live post-fix, PASS under the new 30s cap). A probe FAIL is now a 600s
+  data point, not a 1800s verdict, and needs BROKEN_MIN_CARDS=2 distinct cards for the long
+  bench. (e) queue_wait_secs surfaces spawn costs invisible before: the smoke run's first cards
+  showed qws=10 (pre-claim probe cost) vs the late add's qws=1 — the ledger now prices the
+  probe herd directly. (f) Live-smoke the LINGER before trusting it: `swarm-ctl add` onto the
+  lingering pool served in 12s with zero relaunch — the bh065 16.2-min class is dead on runs
+  that set POOL_LINGER_SEC.

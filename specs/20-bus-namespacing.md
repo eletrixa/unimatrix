@@ -174,3 +174,5 @@ Spec 20 only reads it (`_heartbeat_live`, src/swarm-lib.sh).
 - **Backlog 21:** "Operator can hand-craft BUSDIR and SPEEDWARS_RUN but they can drift (one set, one forgotten)."
 
 Both resolved by atomic `--run` flag derivation + heartbeat liveness gate.
+
+**Amendment pointer 2026-07-31 → [spec 21](./21-speed-observability.md):** explicit `--busdir <path>` flag + git-toplevel ancestor-bus hint on the empty-run abort.
