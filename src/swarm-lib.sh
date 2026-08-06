@@ -1040,7 +1040,14 @@ env_master_preflight() {
     for c in "${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix/env.master" "$HOME/s/.env.master"; do
       [[ -r "$c" && "$c" != "$envf" ]] && { cand="$c"; break; }
     done
-    echo "swarm: fix: export ENV_MASTER_FILE=${cand:-<your secrets file>}" >&2
+    if [[ -n "$cand" ]]; then
+      echo "swarm: fix: export ENV_MASTER_FILE=$cand" >&2
+    else
+      # No readable candidate anywhere — first-run case: the operator has no secrets file yet, so
+      # a bare export line points at nothing. Name the default path to CREATE (mode 600) as the
+      # primary fix; the export stays as the alternative for keys living elsewhere.
+      echo "swarm: fix: create ${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix/env.master (chmod 600) with the key(s) above, or export ENV_MASTER_FILE=<your secrets file>" >&2
+    fi
     return 1
   fi
   return 0

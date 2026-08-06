@@ -3,6 +3,22 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioned with [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### What's new (for humans)
+- **A clearer message when you haven't set up your API-key file yet**: the swarm preflight now
+  tells you to create `~/.config/unimatrix/env.master` with the missing key(s) instead of only
+  suggesting an environment variable pointing at a file you don't have.
+
+### Fixed
+- `env_master_preflight` no-candidate abort (spec 21 FR-8): when no readable secrets file exists
+  anywhere, the fix line now names the XDG default path to create (`chmod 600`) as the primary
+  fix, keeping `export ENV_MASTER_FILE=…` as the alternative (first-run operator report
+  2026-08-06; pinned by a new `tests/env-master-path.bats` case).
+- `unimatrix` usage + header comment: the `report` verb's optional positional is now spelled
+  `[ledger-file]` — `[ledger]` read as a subcommand and produced the confusing
+  `speedwars: no ledger at ledger` when typed literally.
+
 ## [1.6.0] - 2026-08-06
 
 ### What's new (for humans)

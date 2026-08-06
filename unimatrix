@@ -423,7 +423,7 @@ cmd_here() {
   echo "here: cockpit URL   http://127.0.0.1:4747"
 }
 
-# --- plan 004 P2: `unimatrix report [--html] [ledger]` --------------------------------------------
+# --- plan 004 P2: `unimatrix report [--html] [ledger-file]` ---------------------------------------
 
 # _html_esc — stdin -> stdout with the three markup-significant characters escaped. The report's
 # own output is lane names and numbers, but the ledger is operator data: never interpolate it raw.
@@ -490,7 +490,7 @@ usage: unimatrix <verb> [args...]
                  pause-worker | resume-worker | unpark | heartbeat |
                  watchdog-arm | watchdog-check | watchdog-disarm |
                  postmortem | review-stub
-  reporting      report [--html] [--run <label>] [ledger]
+  reporting      report [--html] [--run <label>] [ledger-file]
   help           help | -h | --help
 
 Operator opt-in: alias u=unimatrix
