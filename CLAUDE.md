@@ -89,7 +89,9 @@ POSIX filesystem (never a 9p/drvfs/NFS mount). Judge ≠ executor.
 
 ## Boundaries
 
-- **Always**: Run `bats tests/` before committing. Follow `rules/unimatrix/*.md`. Update
+- **Always**: `./check.sh` green before any **push or release-graft** (gate-on-push, maintainer
+  decision 2026-08-01 — local commits while iterating need only the affected test files: `bats
+  tests/<changed-area>*.bats`). Follow `rules/unimatrix/*.md`. Update
   `CHANGELOG.md` and `docs/versions.md` per wave. Scrub credential/config dirs (`~/.aws`, `~/.ssh`,
   your `$ENV_MASTER_FILE` dir) from any unattended worker's env.
 - **Ask first** (get maintainer sign-off before): Adding a new external dependency (CLI, npm/brew

@@ -3,7 +3,57 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioned with [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.6.0] - 2026-08-06
+
+### What's new (for humans)
+- **Run a swarm on a shoestring**: the new thrifty profile has the low-cost AI lanes do the
+  planning, writing and reviewing while your Claude session only conducts — Anthropic spend per
+  run drops to near zero, and the report now shows the Anthropic share so you can verify it.
+- **Ready-made research and decision swarms**: the new readyroom profile adds deep-research and
+  decision-meeting modes, with a single switch choosing which AI sits in the judge seat.
+- **The full pre-release check finishes in about 5 minutes instead of 20+** — test files now run
+  in parallel.
+- **Test runs no longer pop stray browser tabs or terminal windows on your desktop.**
+
+### Added
+- Readyroom profile (spec 23): deep-research + decision swarm modes (`readyroom:research`,
+  `readyroom:decision`, `readyroom:ceo`) next to thrifty — glm/grok workhorses, opus-or-codex
+  judge seats behind one `READYROOM_JUDGE` env switch, long-card timeouts. New
+  `profiles/readyroom.conf`, `/u:readyroom` command, `GROK_TOOLS` conf knob giving read-only
+  grok cards web_search/web_fetch (default argv unchanged), `profiles/` added to the
+  check.sh host-path/PII gate dirs. Mode pipelines live in the refactor lead repo's rfg- skills.
+- Thrifty profile (spec 22): `/u:thrifty` runs a swarm with minimum Anthropic spend — codex
+  plans + reviews, glm/grok execute, fable orchestrates only. New `profiles/thrifty.conf`
+  (selected via `CONF`, swarm.conf untouched), delegated-plan templates
+  `profiles/thrifty/{plan-request,card-writer}.md`, `DOCTOR_LANES` env knob subsetting the
+  doctor `--live` gate, and an `anthropic share:` footer on the text speedwars report
+  (`--json` contract unchanged). Built by its own target lanes: 6/7 cards authored by
+  glm/codex at $0 Anthropic lane spend.
+
+### Changed
+- `check.sh` bats stage fans out per test file (`CHECK_JOBS`, default 6; `CHECK_JOBS=1` =
+  serial escape hatch) — the serial suite crossed 20 minutes; wall-time now tracks the
+  longest single file. Failures aggregate with each red file's full log replayed.
+- The three longest test files sharded along `@test` boundaries (swarm-run ×4, swarm-loop ×3,
+  swarm-lib ×2; shared preambles extracted to `tests/helpers/*-fixture.bash`) — parallel
+  critical path per file drops from ~16 min to ~4 min. Test count and bodies byte-identical.
+- `CHECK_SKIP_SHELLCHECK` (fixture-copy path in `tests/check-gates.bats` only, loud banner):
+  the gate-proof tests re-linted identical scripts at ~2 min per test — check-gates.bats
+  falls from 20 min to ~5.
+- Gate policy: `check.sh` green now gates **push/release**, not every local commit
+  (maintainer decision 2026-08-01; `CLAUDE.md` §Boundaries).
+
+### Fixed
+- The install/here test family no longer leaks the host's `XDG_CONFIG_HOME` into its fake-HOME
+  fixtures — on boxes that export it (Omarchy/Arch) `cmd_install`/`cmd_here` under test wrote the
+  operator's **real** `~/.config/unimatrix/`, and the fixture assertions went red (the documented
+  2026-08-04 Omarchy baseline failures' root cause; same class as the `LANG` pin).
+- Test runs no longer litter the operator's desktop: the cockpit F5e test stubs the browser
+  opener (`MON_OPEN_CMD=true` — it was popping a dead `localhost:39999` tab via real
+  powershell.exe every suite run), and `swarm-mon.sh --wezterm` honors `SWARM_WEZTERM_BIN`
+  so the fallback test pins a nonexistent path instead of launching a real WezTerm window.
+- The suite's flakiest test (spec04 TIMEOUT_GLM override) got timing headroom (15s→30s outer
+  bound) without weakening the property it proves.
 
 ## [1.5.0] - 2026-08-01
 

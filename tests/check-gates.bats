@@ -18,6 +18,10 @@
 # Design constraints:
 # - CHECK_SKIP_BATS=1 on every check.sh invocation here — without it, each of these tests would
 #   recurse the whole bats suite (including this very file) through the copy's own check.sh run.
+# - CHECK_SKIP_SHELLCHECK=1 alongside it (2026-08-01): these tests prove the grep-gates and
+#   gen-commands steps, not shellcheck — re-linting the identical scripts in every fixture copy
+#   was ~2 min PER TEST and made this file the whole gate's critical path (20 of the gate's
+#   16 min). The real run's own shellcheck leg still lints the actual repo.
 # - The planted violation is written straight to disk in the copy; git ls-files only needs the
 #   PATH already tracked (from the fixture commit) — check.sh's grep reads live file bytes, not
 #   the git blob, so no `git add` is needed after planting.
@@ -54,20 +58,20 @@ setup() {
 }
 
 @test "clean copy: DB-symbol gate and host-path gate both pass" {
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"DB-symbol gate clean"* ]]
   [[ "$output" == *"host-path gate clean"* ]]
   # CHECK_SKIP_BATS=1 is always set here (this suite's own recursion guard) — the plain "check
   # green" line must never appear under it; only the qualified skip line, behind a loud banner.
   [[ "$output" == *"CHECK_SKIP_BATS=1"* ]]
-  [[ "$output" == *"gates green (bats SKIPPED — not a full gate)"* ]]
+  [[ "$output" == *"gates green (bats+shellcheck SKIPPED — not a full gate)"* ]]
   [[ "$output" != *"✓ check green"* ]]
 }
 
 @test "planted DB symbol in an engine script fails check.sh and names the file" {
   printf '\n# UNI_DB=x\n' >> "$COPY/swarm-run.sh"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"DB symbol in engine script"* ]]
   [[ "$output" == *"swarm-run.sh"* ]]
@@ -78,7 +82,7 @@ setup() {
   # DB_RE originally only knew CLI binary names / env-var shapes — node's built-in DB module and
   # its DatabaseSync class had no matching symbol, so this passed clean pre-fix.
   printf '\nconst {DatabaseSync} = require("node:sqlite");\n' >> "$COPY/swarm-run.sh"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"DB symbol in engine script"* ]]
   [[ "$output" == *"swarm-run.sh"* ]]
@@ -88,7 +92,7 @@ setup() {
   # control: the gate is scoped to the four engine scripts only — a DB symbol anywhere else in the
   # tree (e.g. a doc discussing the phase-3 mirror design) must not be mistaken for the real thing.
   printf '\nsee UNI_DB in the phase-3 design\n' >> "$COPY/docs/versions.md"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"DB-symbol gate clean"* ]]
 }
@@ -99,7 +103,7 @@ setup() {
   # very gate this test proves exists.
   local frag1="/home" frag2="/alice/notes.md"
   printf '\nsee %s%s for details\n' "$frag1" "$frag2" >> "$COPY/docs/versions.md"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"host path in tracked content"* ]]
   [[ "$output" == *"$frag1$frag2"* ]]
@@ -108,7 +112,7 @@ setup() {
 @test "planted /Users/ host path in a tracked doc fails check.sh" {
   local frag1="/Users" frag2="/bob/Desktop/notes.txt"
   printf '\nsee %s%s for details\n' "$frag1" "$frag2" >> "$COPY/docs/versions.md"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"host path in tracked content"* ]]
   [[ "$output" == *"$frag1$frag2"* ]]
@@ -119,7 +123,7 @@ setup() {
   # (src/swarm-lib.sh's _scratch_home cage dirs) — the gate must stay green on it or the two new
   # steps would fail on this repo's own real, legitimate content.
   printf '\nHOME=$BUS/home/claude.c1 is the per-worker cage dir\n' >> "$COPY/docs/versions.md"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"host-path gate clean"* ]]
 }
@@ -129,7 +133,7 @@ setup() {
   # unimatrix) — a leak planted there passed clean pre-fix. swarm-run.sh stands in for the class.
   local frag1="/home" frag2="/alice/private"
   printf '\n# see %s%s\n' "$frag1" "$frag2" >> "$COPY/swarm-run.sh"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"host path in tracked content"* ]]
   [[ "$output" == *"swarm-run.sh"* ]]
@@ -142,7 +146,7 @@ setup() {
   # silently passed. Built via concatenation for the same self-reference reason as the tests above.
   local frag1="/home" frag2="/alice/secrets"
   printf '\ncage $BUS/home/claude and leak %s%s\n' "$frag1" "$frag2" >> "$COPY/docs/versions.md"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"host path in tracked content"* ]]
   [[ "$output" == *"$frag1$frag2"* ]]
@@ -151,14 +155,14 @@ setup() {
 @test "F9: planted uppercase Users-dir host path fails check.sh (HOSTPATH_RE case extension)" {
   local frag1="/Users" frag2="/Bob/Desktop/notes.txt"
   printf '\nsee %s%s for details\n' "$frag1" "$frag2" >> "$COPY/docs/versions.md"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"host path in tracked content"* ]]
   [[ "$output" == *"$frag1$frag2"* ]]
 }
 
 @test "P1-FR2: clean copy passes the generated-commands drift step" {
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"plugin/commands/ matches the generator"* ]]
 }
@@ -167,13 +171,13 @@ setup() {
   # mutate one committed stub directly, exactly the "hand-copied instead of generated" failure
   # mode FR-2 exists to catch
   printf 'HAND EDITED — NOT GENERATED\n' > "$COPY/plugin/commands/call.md"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"plugin/commands/ is out of date"* ]]
   [[ "$output" == *"plugin/gen-commands.sh"* ]]
 
   "$COPY/plugin/gen-commands.sh"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"plugin/commands/ matches the generator"* ]]
 }
@@ -182,13 +186,13 @@ setup() {
   # Simulates a canonical u-*.md having been deleted without re-running the generator: the stub
   # goes stale (an extra file the fresh regeneration no longer produces) rather than disappearing.
   cp "$COPY/plugin/commands/call.md" "$COPY/plugin/commands/orphan.md"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"plugin/commands/ is out of date"* ]]
 }
 
 @test "P1-FR2 dup-prose: clean copy has no duplicated 20-word command shingle (covers plugin/commands boilerplate + the bare 1-line aliases — neither false-positives)" {
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"duplicate-prose detector clean"* ]]
 }
@@ -201,7 +205,7 @@ setup() {
     "$COPY/.claude/commands/u-call.md" | tr -s ' \n' ' ' | cut -d' ' -f1-25)"
   printf '\n%s\n' "$words25" >> "$COPY/.claude/commands/u-swarm.md"
 
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"duplicated command prose"* ]]
   [[ "$output" == *"u-call.md"* ]]
@@ -214,7 +218,7 @@ setup() {
 # gate), so proving the join on one gate proves DIRS itself now covers these two directories.
 
 @test "F-plugin: control — clean plugin/ and .claude-plugin/ pass the PII/host-path gates" {
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"PII / secret gate clean"* ]]
   [[ "$output" == *"host-path gate clean"* ]]
@@ -223,7 +227,7 @@ setup() {
 @test "F-plugin: a planted absolute host path in plugin/README.md fails check.sh" {
   local frag1="/home" frag2="/alice/notes"
   printf '\nsee %s%s for details\n' "$frag1" "$frag2" >> "$COPY/plugin/README.md"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"host path in tracked content"* ]]
   [[ "$output" == *"$frag1$frag2"* ]]
@@ -232,7 +236,7 @@ setup() {
 @test "F-plugin: a planted absolute host path in .claude-plugin/marketplace.json fails check.sh" {
   local frag1="/home" frag2="/bob/secrets"
   printf '\n// see %s%s\n' "$frag1" "$frag2" >> "$COPY/.claude-plugin/marketplace.json"
-  run env CHECK_SKIP_BATS=1 "$COPY/check.sh"
+  run env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$COPY/check.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"host path in tracked content"* ]]
   [[ "$output" == *"$frag1$frag2"* ]]
@@ -274,11 +278,10 @@ setup() {
     cp "$REPO/$f" "$empty/$f"
   done
   git -C "$empty" init -q
-  # 180s, not a tight bound: shellcheck (the step right after host-path in the new order) takes
-  # ~30s CPU over this project's large scripts (2026-08-01: grown well past the ~15s the old 45s
-  # bound assumed) and wall-time scales with box load — the point is proving no INDEFINITE stdin
-  # block, not benchmarking shellcheck.
-  run timeout 180 env CHECK_SKIP_BATS=1 "$empty/check.sh"
+  # 60s, not a tight bound (shellcheck is skipped here like every fixture invocation, so the
+  # copy's run is grep-gates + gen-commands only) — the point is proving no INDEFINITE stdin
+  # block, not benchmarking.
+  run timeout 60 env CHECK_SKIP_BATS=1 CHECK_SKIP_SHELLCHECK=1 "$empty/check.sh"
   [ "$status" -ne 124 ]
   [[ "$output" == *"no tracked files under"* ]]
   [[ "$output" == *"host-path gate clean"* ]]

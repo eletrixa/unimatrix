@@ -239,7 +239,10 @@ tmux -L "$SOCK" split-window -t "$firehose_pane" -v -l 20% \
 tmux -L "$SOCK" select-pane -t "$firehose_pane"
 
 if [[ "${1:-}" == "--wezterm" ]]; then
-  wez="/mnt/c/Program Files/WezTerm/wezterm.exe"
+  # SWARM_WEZTERM_BIN override: tests point this at a nonexistent path — on a box where the real
+  # binary EXISTS, the hardcoded path made every suite run spawn a live WezTerm window attached
+  # to a throwaway test socket that teardown then killed (2026-08-01, operator-visible litter).
+  wez="${SWARM_WEZTERM_BIN:-/mnt/c/Program Files/WezTerm/wezterm.exe}"
   if [[ -x "$wez" ]]; then
     "$wez" cli spawn --new-window -- wsl.exe -- tmux -L "$SOCK" attach -r -t mon || true
   fi

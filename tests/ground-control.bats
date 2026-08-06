@@ -510,7 +510,10 @@ STUB
 
   [ "$status" -eq 0 ]
   elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
-  [ "$elapsed_ms" -lt 2000 ]
+  # 8s, not 2s (2026-08-01: a ~10ms no-op blew 2s of pure fork latency under a saturated box +
+  # parallel suite). The property is "did NOT sit in the probe/retry loop" — that loop takes 10s+,
+  # so 8s still discriminates.
+  [ "$elapsed_ms" -lt 8000 ]
 
   after="$(pgrep -f "site/server.mjs" | wc -l || true)"
   [ "$before" -eq "$after" ]

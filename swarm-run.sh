@@ -6,7 +6,7 @@
 # Project: unimatrix — multi-model swarm orchestrator driven from Claude Code
 # Module:  swarm-run.sh
 # Deps:    src/swarm-lib.sh, swarm.conf
-# Tested:  tests/swarm-run.bats (PATH-shimmed fake CLIs — no real API calls)
+# Tested:  tests/swarm-run-*.bats (PATH-shimmed fake CLIs — no real API calls)
 #
 # Key responsibilities:
 # - spec 21 speed surfaces: POOL_LINGER_SEC drain-linger in the pool gate (late adds served
@@ -2058,7 +2058,9 @@ cmd_doctor_live() {
   local bus_existed=0
   [[ -d "$BUSDIR" ]] && bus_existed=1
   local lane result rc overall=0
-  for lane in claude codex gemini grok glm kimi; do
+  # DOCTOR_LANES: optional space-separated lane subset for the live gate (env-only knob, not in CONF_KEYS) — e.g. DOCTOR_LANES="glm grok codex claude" for thrifty-profile preflight; unset = all six.
+  # shellcheck disable=SC2086
+  for lane in ${DOCTOR_LANES:-claude codex gemini grok glm kimi}; do
     rc=0
     result="$(_doctor_probe_lane "$lane")" || rc=$?
     printf 'probe       %-8s %s\n' "$lane" "$result"

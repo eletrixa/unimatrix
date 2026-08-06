@@ -264,7 +264,7 @@ _fake_engine() {
   echo '{"someOtherKey": true}' > "$fakehome/.claude/settings.json"
   echo '{"enabledPlugins": {"other@x": true}}' > "$fakehome/.claude-acct/acct1/settings.json"
 
-  run env HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
   [ "$status" -eq 0 ]
   [[ "$output" == *"symlink"*"added"* ]]
   [[ "$output" == *"config"*"added"* ]]
@@ -299,14 +299,14 @@ _fake_engine() {
   mkdir -p "$fakehome/.claude"
   echo '{"someOtherKey": true}' > "$fakehome/.claude/settings.json"
 
-  run env HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
   [ "$status" -eq 0 ]
 
   cp "$fakehome/.claude/settings.json" "$BATS_TEST_TMPDIR/after-run1-settings.json"
   cp "$fakehome/.config/unimatrix/config" "$BATS_TEST_TMPDIR/after-run1-config"
   cp "$fakehome/.claude/settings.json.bak.unimatrix-install" "$BATS_TEST_TMPDIR/orig-backup.json"
 
-  run env HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
   [ "$status" -eq 0 ]
   [[ "$output" == *"symlink"*"unchanged"* ]]
   [[ "$output" == *"config"*"unchanged"* ]]
@@ -324,7 +324,7 @@ _fake_engine() {
   mkdir -p "$fakehome/.config/unimatrix"
   echo 'ENV_MASTER_FILE=/custom/secrets/path' > "$fakehome/.config/unimatrix/config"
 
-  run env HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
   [ "$status" -eq 0 ]
 
   grep -qxF 'ENV_MASTER_FILE=/custom/secrets/path' "$fakehome/.config/unimatrix/config"
@@ -338,7 +338,7 @@ _fake_engine() {
   mkdir -p "$fakehome/.claude"
   echo '{}' > "$fakehome/.claude/settings.json"
 
-  run env HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
   [ "$status" -eq 0 ]
   [[ "$output" == *"settings"*"added"* ]]
   [ ! -e "$fakehome/.claude/settings.json.lock" ]
@@ -351,7 +351,7 @@ _fake_engine() {
   mkdir -p "$fakehome/.claude"
   echo '{}' > "$fakehome/.claude/settings.json"
 
-  run env HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install --dry-run"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install --dry-run"
   [ "$status" -eq 0 ]
   [[ "$output" == *"would add"* ]]
 
@@ -368,7 +368,7 @@ _fake_engine() {
   mkdir -p "$fakehome/.local/bin"
   echo 'echo not-unimatrix' > "$fakehome/.local/bin/unimatrix"
 
-  run env HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install"
   [ "$status" -ne 0 ]
   [[ "$output" == *"REFUSED"* ]]
   [ ! -L "$fakehome/.local/bin/unimatrix" ]
@@ -382,7 +382,7 @@ _fake_engine() {
   local prefix="$BATS_TEST_TMPDIR/custom-bin15f"
   mkdir -p "$fakehome"
 
-  run env HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install --prefix '$prefix'"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "source '$engine/unimatrix'; cmd_install --prefix '$prefix'"
   [ "$status" -eq 0 ]
   [ -L "$prefix/unimatrix" ]
   [ ! -e "$fakehome/.local/bin/unimatrix" ]
@@ -399,7 +399,7 @@ _fake_engine() {
   mkdir -p "$repo"
   local repo_real; repo_real="$(cd "$repo" && pwd -P)"
 
-  run env HOME="$fakehome" bash -c "cd '$repo' && source '$engine/unimatrix' && cmd_here"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "cd '$repo' && source '$engine/unimatrix' && cmd_here"
   [ "$status" -eq 0 ]
   [[ "$output" == *"cockpit URL"* ]]
   [[ "$output" == *"4747"* ]]
@@ -432,13 +432,13 @@ _fake_engine() {
   echo 'FANOUT=99' > "$repo/swarm.conf"
   printf 'node_modules/\n.bus*\n' > "$repo/.gitignore"
 
-  run env HOME="$fakehome" bash -c "cd '$repo' && source '$engine/unimatrix' && cmd_here"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "cd '$repo' && source '$engine/unimatrix' && cmd_here"
   [ "$status" -eq 0 ]
   grep -qxF 'FANOUT=99' "$repo/swarm.conf"
   grep -qxF 'node_modules/' "$repo/.gitignore"
   [ "$(grep -cxF '.bus*' "$repo/.gitignore")" -eq 1 ]
 
-  run env HOME="$fakehome" bash -c "cd '$repo' && source '$engine/unimatrix' && cmd_here"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "cd '$repo' && source '$engine/unimatrix' && cmd_here"
   [ "$status" -eq 0 ]
   run jq -e 'keys | length == 1' "$fakehome/.config/unimatrix/fleet.json"
   [ "$status" -eq 0 ]
@@ -453,7 +453,7 @@ _fake_engine() {
   mkdir -p "$repo"
   printf '.bus/\n.bus-*/\n' > "$repo/.gitignore"
 
-  run env HOME="$fakehome" bash -c "cd '$repo' && source '$engine/unimatrix' && cmd_here"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" bash -c "cd '$repo' && source '$engine/unimatrix' && cmd_here"
   [ "$status" -eq 0 ]
   [[ "$output" == *"gitignore"*"exists"*"already covered"* ]]
   [ "$(wc -l < "$repo/.gitignore")" -eq 2 ]
@@ -475,7 +475,7 @@ echo "9p"
 STUB
   chmod +x "$stub/stat"
 
-  run env HOME="$fakehome" PATH="$stub:$PATH" bash -c "cd '$repo' && source '$engine/unimatrix' && cmd_here"
+  run env -u XDG_CONFIG_HOME HOME="$fakehome" PATH="$stub:$PATH" bash -c "cd '$repo' && source '$engine/unimatrix' && cmd_here"
   [ "$status" -ne 0 ]
   [[ "$output" == *"9p"* ]]
 

@@ -8,10 +8,11 @@ then re-smoke per `01-feasibility-tests.md` §re-smoke. CHANGELOG.md records the
 | Tool | Version | Channel | Re-smoke trigger |
 |------|---------|---------|------------------|
 | claude | 2.1.215 | native installer (`~/.local/bin`) | any upgrade — stream-json drift + GLM lane. 2.1.215 gotcha: the #67861 OAuth-conflict warning on the GLM lane now prints on **stdout** before the JSON (was stderr) — `extract_answer`'s `fromjson? // empty` is immune, but never pipe raw lane stdout straight into `jq` |
-| codex | 0.144.6 | `npm i -g @openai/codex` | any upgrade — `--json` threads/turns schema is experimental |
+| codex | 0.146.0 | static musl binary at `~/.local/opt/codex-bin/codex` (symlinked from `~/.local/bin/codex`; replaced the Omarchy mise/npx shim, which died exit-127 inside the `env -i` cage — shim kept as `~/.local/bin/codex.mise-shim.bak`) | any upgrade — `--json` threads/turns schema is experimental; re-copy the static binary, don't restore the shim |
 | gemini | 0.51.0 | `npm i -g @google/gemini-cli` (brew DEPRECATED) | any upgrade — envelope fields + trust gate. **Sandbox image rebuild owed**: `unimatrix-gemini-lane` is still `:0.49.0` — rebuild/retag to 0.51.0 + PONG round trip before the next `GEMINI_SANDBOX=docker` run |
 | grok | 0.2.103 (stable) | xAI Grok Build CLI | any upgrade — streaming-json envelope drift; model retirement or a new silent alias (`grok-4.5` → `grok-4.5-build`) |
-| bats | 1.13.0 | linuxbrew `bats-core` | — |
+| bats | 1.14.0 | bats-core `install.sh ~/.local` (linuxbrew gone with the WSL box) | — |
+| shellcheck | 0.11.0 | static binary in `~/.local/bin` | — |
 | jq | 1.7 | system | — |
 | tmux | 3.4 | system | — |
 | bash | ≥5.1 required (`wait -n -p`) | system | — |
@@ -49,7 +50,7 @@ allowlist** (`-e GEMINI_API_KEY -e GEMINI_CLI_TRUST_WORKSPACE`), with the values
 ## Auth state
 
 - claude: OAuth (subscription) — untouched by GLM swap (child-only env).
-- codex: **API-key mode** via `codex login --with-api-key` (auth.json; `--api-key` flag removed).
+- codex: **ChatGPT OAuth** (`codex login status` → "Logged in using ChatGPT"; auth.json migrated from the WSL box 2026-08-04 — the earlier API-key mode note is obsolete).
 - gemini: `GEMINI_API_KEY` env (AI Studio) + `GEMINI_CLI_TRUST_WORKSPACE=true`.
 - GLM: `ANTHROPIC_AUTH_TOKEN` (child env only, `env -u ANTHROPIC_API_KEY`).
 - grok: OAuth file `~/.grok/auth.json` (mode 600, copied into the caged scratch HOME) — not an env

@@ -57,9 +57,11 @@ teardown() {
 }
 
 @test "swarm-mon.sh: --wezterm is non-fatal when the /mnt/c binary is unreachable" {
-  # This box has no /mnt/c WezTerm binary in a bats sandbox either way — asserts the documented
-  # fallback (specs/02-cockpit.md FR-6): the tmux session still builds even if the attach fails.
-  run "$MON" --wezterm
+  # SWARM_WEZTERM_BIN pinned to a nonexistent path: on a box where the real /mnt/c binary DOES
+  # exist, the old assumption ("no WezTerm in a bats sandbox") launched a live window attached to
+  # this test's throwaway socket on every suite run. Asserts the documented fallback
+  # (specs/02-cockpit.md FR-6): the tmux session still builds even if the attach fails.
+  SWARM_WEZTERM_BIN="$BATS_TEST_TMPDIR/absent-wezterm" run "$MON" --wezterm
   [ "$status" -eq 0 ]
   run tmux -L "$SOCK" has-session -t mon
   [ "$status" -eq 0 ]

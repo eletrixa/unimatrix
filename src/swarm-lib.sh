@@ -4,7 +4,7 @@
 # Project: unimatrix — multi-model swarm orchestrator driven from Claude Code
 # Module:  src/swarm-lib.sh
 # Deps:    coreutils (mv/touch/find/stat/date), jq, git (write-card diff sections), bash >=5.1
-# Tested:  tests/swarm-lib.bats
+# Tested:  tests/swarm-lib-*.bats
 #
 # Key responsibilities:
 # - Bus directory lifecycle (specs/queue/claimed/done/cancelled/limits/pids)
@@ -139,7 +139,7 @@ CONF_KEYS=(PLAN ORCHESTRATOR REVIEW EXEC_CHAIN MAX_ITERATIONS BUDGET_USD FANOUT 
            WORKER_TIMEOUT_SEC MAX_LANE_RETRIES VERIFY_MAP LEDGER_AUTO GEMINI_SANDBOX
            MON_PORT MON_AUTOOPEN CLASS_REVIEW CLASS_EXEC REVIEW_CHAIN PIN_WAIT_SEC
            PLAN_CHAIN ORCH_CHAIN ORCH_TAKEOVER_MIN FEEDBACK_AUTO PAYG_FALLBACK
-           GLM_MAX_THINKING_TOKENS KIMI_MAX_THINKING_TOKENS GROK_EFFORT CAGE_DENY_MAX
+           GLM_MAX_THINKING_TOKENS KIMI_MAX_THINKING_TOKENS GROK_EFFORT GROK_TOOLS CAGE_DENY_MAX
            STAGGER_FIRST_SPAWN_SEC PROBE_AUTO
            TIMEOUT_CLAUDE TIMEOUT_CODEX TIMEOUT_GEMINI TIMEOUT_GLM TIMEOUT_GROK TIMEOUT_KIMI
            POOL_LINGER_SEC PROBE_TIMEOUT_SEC BROKEN_MIN_CARDS
@@ -202,6 +202,10 @@ conf_load() {
   # the documented way to restore the grok CLI's own high-effort default — was silently rewritten
   # back to "medium" here before lane_cmd ever saw it.
   : "${GROK_EFFORT=medium}"              # grok reasoning effort; empty = restore the CLI default
+  # `:=` on purpose (unlike GROK_EFFORT): an empty --tools '' allowlists NOTHING, so empty is
+  # never a meaningful value here — it collapses back to the read-only default set. Read-only
+  # grok cards only; the write branch passes no --tools at all (full default toolset).
+  : "${GROK_TOOLS:=read_file,grep,list_dir}"   # read-only grok card tool allowlist (spec 23)
   # spec 14 FR-1: ceiling, not a toggle — a run that knowingly cages out a few reads raises it;
   # absurdly high is the opt-out. 0 = any read-class denial parks the card.
   : "${CAGE_DENY_MAX:=0}"
@@ -1257,7 +1261,7 @@ lane_cmd() {
       else
         # shellcheck disable=SC2054  # commas are the grok CLI's own --tools list syntax, one
         # array element, not a (missing) bash array separator
-        LANE_ARGV+=(--tools read_file,grep,list_dir --no-subagents)
+        LANE_ARGV+=(--tools "${GROK_TOOLS:-read_file,grep,list_dir}" --no-subagents)
       fi
       [[ "$model" == "default" ]] || LANE_ARGV+=(-m "$model")
       ;;

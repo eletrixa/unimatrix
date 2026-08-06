@@ -5,7 +5,7 @@
 Fan a question or a goal out to Claude, Codex, Gemini, GLM, Grok, and Kimi in parallel, headless,
 coordinated over plain files — no MCP, no daemon, no DB.
 
-![tests](https://img.shields.io/badge/tests-865%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-961%20passing-brightgreen)
 ![shellcheck](https://img.shields.io/badge/shellcheck-clean-brightgreen)
 ![bash](https://img.shields.io/badge/bash-%3E%3D5.1-blue)
 ![lanes](https://img.shields.io/badge/lanes-6%20%28claude%20%C2%B7%20codex%20%C2%B7%20gemini%20%C2%B7%20glm%20%C2%B7%20grok%20%C2%B7%20kimi%29-blueviolet)
@@ -155,12 +155,24 @@ unimatrix doctor --plugin  # per-account install-drift table
 ```
 
 The repo is its own Claude Code plugin marketplace: `/u:call`, `/u:swarm`, `/u:loop`,
-`/u:speedwars`, `/u:setup` work from **any repo, any account** — generated 3-line pointer stubs
+`/u:speedwars`, `/u:thrifty`, `/u:readyroom`, `/u:setup` work from **any repo, any account** — generated 3-line pointer stubs
 resolve the one engine checkout at invocation time (never a vendored copy; `check.sh` fails on
 stub drift). Every run opens with a banner naming exactly which checkout/branch/head/bus it chose,
 and closes with a three-line per-lane summary — $ per **verified**-done, p95 wall, false-done
 rate — from one canonical verdict-fold both the report and the cockpit replay in tests. Raw run
 evidence is archived compressed under `docs/ops/bus-archives/<run>/` at every close.
+
+## Profiles (specs 22-23)
+
+`swarm.conf` stays untouched — a profile is an alternate conf the run selects via `CONF`:
+
+- **Thrifty** (`/u:thrifty`, `profiles/thrifty.conf`) — minimum-Anthropic-spend swarms: codex
+  plans and reviews, GLM/Grok execute, the Claude session only orchestrates. The speedwars
+  report gains an `anthropic share:` footer so the spend split is verifiable per run.
+- **Readyroom** (`/u:readyroom`, `profiles/readyroom.conf`) — deep-research + decision swarm
+  modes (`readyroom:research`, `readyroom:decision`, `readyroom:ceo`): GLM/Grok workhorses with
+  long-card timeouts, web-capable read-only Grok cards (`GROK_TOOLS`), and one `READYROOM_JUDGE`
+  env switch flipping the judge seat between Opus and Codex.
 
 ## The cockpit
 
@@ -189,7 +201,7 @@ tmux -L swarm attach -r -t mon         # attach read-only
 
 ## Status and limitations
 
-The full bats suite green, 5 scripts shellcheck-clean, all 6 lanes (claude, codex, gemini, glm,
+The full bats suite green, 8 scripts shellcheck-clean, all 6 lanes (claude, codex, gemini, glm,
 grok, kimi) live-verified — including loop convergence: a toy repo with a failing oracle driven
 to a genuinely green `COMPLETE.md` by a write-capable claude worker in a scratch git worktree
 (FR-15). The web-facing gemini lane can run
@@ -215,12 +227,13 @@ building this, corrected protocol designs, model quirks — see
 | `src/swarm-ctl` | Bus control verbs: pause/resume/cancel/add/abort/status/kill |
 | `src/swarm-lib.sh` | Shared bus primitives: claim, heartbeat, reaper, gate, lane invocations |
 | `swarm.conf` | Bash-sourceable role/lane config (`PLAN`, `EXEC_CHAIN`, `MAX_ITERATIONS`, ...) — copy from `swarm.conf.example` |
+| `profiles/` | Alternate run configs selected via `CONF`: `thrifty.conf`, `readyroom.conf` + delegated-plan templates |
 | `.bus/` | The file-bus: `specs/ queue/ claimed/ done/ limits/ loop/` + per-worker `run-*.jsonl` / `res-*.txt` |
 | `.claude/commands/` | `/setup`, `/swarm`, and `/swarm-loop` slash-command definitions |
 | `specs/` | Spec-driven design docs — start at [`specs/README.md`](specs/README.md) |
 | `rules/unimatrix/` | Project-specific coding rules: bus discipline, model lanes, loop discipline |
 | `docs/` | Build history, versions, ops ledger — see [`docs/versions.md`](docs/versions.md), [`docs/lane-economics.md`](docs/lane-economics.md) (which lanes cost real money and why), and [`docs/ops/llm-runs.md`](docs/ops/llm-runs.md) |
-| `tests/` | bats-core suite (316 tests) |
+| `tests/` | bats-core suite (961 tests) |
 | `site/` | Overview page served at [unimatrix.asajj.cz](https://unimatrix.asajj.cz) (Cloudflare Worker, static assets) |
 
 For the full usage guide see `docs/usage.md`; for the design history and the architecture bake-off

@@ -6,7 +6,7 @@
 # Module:  swarm-loop.sh
 # Deps:    src/swarm-lib.sh (conf_load/bus_init only), swarm-run.sh (invoked as a FANOUT=1
 #          subprocess), swarm.conf, jq
-# Tested:  tests/swarm-loop.bats (PATH-shimmed fake CLIs + a fake oracle — no real API calls)
+# Tested:  tests/swarm-loop-*.bats (PATH-shimmed fake CLIs + a fake oracle — no real API calls)
 #
 # Key responsibilities:
 # - criteria.md contract: written once at init, checksum-guarded on every iterate() so a worker

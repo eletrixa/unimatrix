@@ -16,6 +16,9 @@
 # - Second table stratified by complexity bucket (C1-C5) where run-meta rows exist — printed under
 #   its COVERAGE DENOMINATOR (plan 004 P2-FR2 / docs/ops/ledger-coverage.md: ledger coverage is
 #   under the 80% bar, so no stratified figure may ever render bare again).
+# - Text-branch "anthropic share" footer: $/tokens for served_lane=="claude" priced rows vs all
+#   priced rows — only the claude lane is Anthropic-billed (glm/kimi ride the CLI but carry their
+#   own served_lane + recomputed pricing). Folded over the same attempt set, so --run applies.
 # - `--json` emits the canonical per-lane aggregates only (no medians, no formatting) — the shape
 #   the fixture pins and `unimatrix mirror --verify` will diff against (plan 004 P3-FR7).
 # - `--run <label>` narrows every row to one run BEFORE folding (plan 004 P2-FR1's close-out lane
@@ -59,6 +62,10 @@ report() {
   # 6 dp is the contract (jq and JS must land on the same JSON literal); 3 dp is for the table.
   def r6: if . == null then null else (. * 1000000 | round) / 1000000 end;
   def usd3: if . == null then "-" else (. * 1000 | round / 1000 | tostring) end;
+  # 2 dp fixed form for the anthropic-share footer dollars (always "0.00"-shaped, never null/"-").
+  def usd2: (. * 100 | round | tostring) as $c
+    | if ($c | length) <= 2 then "0." + ("0" * (2 - ($c | length))) + $c
+      else $c[:-2] + "." + $c[-2:] end;
   # v0 rows encode `verified` as the STRING "pass"/"fail" (case-exact) instead of a boolean
   # (canon rule 11). Normalize both encodings to real booleans before judging; any other value
   # (null, any other string) stays a non-judgment.
@@ -152,7 +159,23 @@ report() {
          + (if $runs_t == 0 then "0" else ($runs_c * 100 / $runs_t | round | tostring) end) + "%"
          + " (\($cards_c) of \($cards_t) cards carry a complexity bucket)"),
       "LANE:CX\tATTEMPTS\tCARDS\tVDONE\tFALSE-DONE\tUNJUDGED\tFAIL\tMED-WALL\tP95-WALL\tMED-TOK/S\t$/VDONE",
-      ($LX | to_entries | sort_by(.key)[] | row(.key; .value))
+      ($LX | to_entries | sort_by(.key)[] | row(.key; .value)),
+      # anthropic-share footer (tab-less => awk passes it through verbatim, like the coverage
+      # caption above). Only served_lane=="claude" rows are Anthropic-billed — glm/kimi ride the
+      # claude CLI but carry their own served_lane + recomputed pricing, so they are excluded.
+      # Folded over $att (the same attempt set every other figure uses), so --run applies.
+      ($att
+        | (map(select((.cost_usd | type) == "number"))) as $p
+        | ($p | map(select(.served_lane == "claude"))) as $pc
+        | (($pc | map(.cost_usd) | add) // 0) as $cc
+        | (($p  | map(.cost_usd) | add) // 0) as $tc
+        | (($pc | map(((.tokens_in // 0) + (.tokens_out // 0))) | add) // 0) as $ct
+        | (($p  | map(((.tokens_in // 0) + (.tokens_out // 0))) | add) // 0) as $tt
+        | ($cc | usd2) as $ccs
+        | ($tc | usd2) as $tcs
+        | (if $tc == 0 then 0 else ($cc * 100 / $tc | round) end) as $pct
+        | (if $tt == 0 then 0 else ($ct * 100 / $tt | round) end) as $ttpct
+        | "anthropic share: $\($ccs) of $\($tcs) priced cost (\($pct)%) · \($ct) of \($tt) tokens (\($ttpct)%) — claude lane only; fable session + doctor probes not ledgered")
     end
 ' "$FILE"
 }

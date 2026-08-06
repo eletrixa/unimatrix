@@ -24,6 +24,12 @@
 # invocation. It skips bats tests/ wholesale — including the traversal/write-cage security tests —
 # so the skip prints a loud banner and the final line never claims the plain "check green"; it's
 # never a substitute for a real bats run. Never set this for a real check.sh run.
+#
+# CHECK_JOBS (default 6) fans the bats stage out per test file — each .bats file runs in its own
+# bats process, failures aggregate, wall-time collapses to roughly the longest file (the serial
+# suite crossed 20 min on 2026-08-01). CHECK_JOBS=1 restores the serial `bats tests/` run — the
+# escape hatch when a parallel-only flake is suspected. 6, not nproc: the suite's timing-sensitive
+# tests (linger, probe caps, lease races) flake under full-core contention.
 set -euo pipefail
 shopt -s inherit_errexit
 cd "$(dirname "$0")"
@@ -49,7 +55,7 @@ step "PII / secret gate"
 # plugin/ + .claude-plugin/ (cross-review finding): spec 17 claims plugin/** ships host-path-free —
 # nothing enforced that until they joined this list. Both gates below (PII/secret here, host-path
 # in step 3) read this same DIRS array, so one addition covers both.
-DIRS=(docs specs src rules plans tests site .claude feedback plugin .claude-plugin)
+DIRS=(docs specs src rules plans tests site .claude feedback plugin .claude-plugin profiles)
 gate_failed=0
 
 mapfile -t FILES < <(git ls-files -- "${DIRS[@]}" 2>/dev/null || true)
@@ -233,7 +239,16 @@ ok "duplicate-prose detector clean"
 
 # ── 5. shellcheck ───────────────────────────────────────────────────────────
 step "shellcheck -x"
-if command -v shellcheck >/dev/null 2>&1; then
+skip_shellcheck=0
+if [[ "${CHECK_SKIP_SHELLCHECK:-0}" == "1" ]]; then
+  # Same contract as CHECK_SKIP_BATS: tests/check-gates.bats' fixture copies ONLY. Those tests
+  # prove the grep-gates fire on planted violations — re-linting the identical scripts in every
+  # copy was ~2 min per test (2026-08-01 profile: check-gates.bats at 20 min WAS the gate's
+  # critical path). Never set this for a real check.sh run.
+  skip_shellcheck=1
+  echo "⚠⚠⚠ CHECK_SKIP_SHELLCHECK=1 — shellcheck SKIPPED ⚠⚠⚠"
+  echo "⚠⚠⚠ tests/check-gates.bats fixture-copy path ONLY — never set this for a real run ⚠⚠⚠"
+elif command -v shellcheck >/dev/null 2>&1; then
   shellcheck -x "${SHELL_SOURCES[@]}"
   ok "shellcheck clean"
 else
@@ -248,14 +263,48 @@ if [[ "${CHECK_SKIP_BATS:-0}" == "1" ]]; then
   echo "⚠⚠⚠ CHECK_SKIP_BATS=1 — bats tests/ SKIPPED, including traversal/write-cage security tests ⚠⚠⚠"
   echo "⚠⚠⚠ planted-line recursion path ONLY (tests/check-gates.bats) — never set this for a real run ⚠⚠⚠"
 elif command -v bats >/dev/null 2>&1; then
-  bats tests/
+  CHECK_JOBS="${CHECK_JOBS:-6}"
+  if [[ ! "$CHECK_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+    fail "CHECK_JOBS must be a positive integer (got '$CHECK_JOBS')"; exit 1
+  fi
+  if (( CHECK_JOBS == 1 )); then
+    bats tests/
+  else
+    batslog="$(mktemp -d)"
+    bats_rc=0
+    for tf in tests/*.bats; do
+      while (( $(jobs -rp | wc -l) >= CHECK_JOBS )); do
+        wait -n || bats_rc=1
+      done
+      bats "$tf" > "$batslog/${tf##*/}.log" 2>&1 &
+    done
+    while (( $(jobs -rp | wc -l) > 0 )); do
+      wait -n || bats_rc=1
+    done
+    if (( bats_rc )); then
+      for lf in "$batslog"/*.log; do
+        if grep -q '^not ok' "$lf"; then
+          echo "── ${lf##*/} ──"
+          cat "$lf"
+        fi
+      done
+      rm -rf "$batslog"
+      fail "bats failed (CHECK_JOBS=$CHECK_JOBS — rerun with CHECK_JOBS=1 to rule out a parallel-only flake)"
+      exit 1
+    fi
+    echo "$(awk '/^ok /{n++} END{print n+0}' "$batslog"/*.log) tests green across $(find tests -maxdepth 1 -name '*.bats' | wc -l) files (CHECK_JOBS=$CHECK_JOBS)"
+    rm -rf "$batslog"
+  fi
   ok "tests pass"
 else
   echo "⚠ bats not installed — skipping tests"
 fi
 
-if ((skip_bats)); then
-  echo "✓ gates green (bats SKIPPED — not a full gate)"
+if ((skip_bats || skip_shellcheck)); then
+  skipped=""
+  ((skip_bats)) && skipped+="bats+"
+  ((skip_shellcheck)) && skipped+="shellcheck+"
+  echo "✓ gates green (${skipped%+} SKIPPED — not a full gate)"
 else
   echo "✓ check green"
 fi

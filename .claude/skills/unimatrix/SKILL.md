@@ -1,6 +1,6 @@
 ---
 name: unimatrix
-version: 1.5.0
+version: 1.6.0
 description: Plan AND operate unimatrix swarm runs — decomposition, lane assignment, bus setup, gates, monitoring, troubleshooting, evidence, and the cross-repo feedback drop-box. Use when Fable is about to orchestrate work through the unimatrix file-bus (/swarm, /swarm-loop, swarm-run.sh, write-capable lanes, cross-model review), when the user says "use unimatrix", "swarm this", "plan the swarm", "check the swarm", when operating or debugging a live run, or when any agent in any repo wants to send unimatrix feedback. Self-improving — append lessons after every run.
 ---
 
@@ -59,7 +59,7 @@ Operating/debugging a live run: jump to §6. Sending feedback from another repo:
 | Self-contained UI/render/CLI code, C1 ONLY | grok write lane | fastest honest C1 lane (median done 97s; the all-rows median of 35s IS the false-done tell). C2+/prose/meta pin claude:sonnet. Shared cage requires a .files manifest (engine-enforced since 2026-07-29); no manifest means own cage. False-done class recurring since 2026-07-19 — the manifest gate is what un-benches it, not trust |
 | Review / audit / adversarial verify | codex (REVIEW default) + lanes that did NOT write the card | judge is never the executor; best done-rate (86%), median 68s, near-free; honest-refusal false-done class still open (backlog 68) |
 | Multi-file C2/C3 across many files, 1M context | kimi | REAL PAYG dollars; **lane DEAD since 2026-07-26 (Moonshot balance zero)** — plan zero kimi cards until topped up; also the CLASS_REVIEW failover seat (0 review cards ever served — quality unproven) |
-| Web research | gemini (read-only; docker sandbox if unattended) | its only niche — 19% done-rate, unpriced tier; never on the critical path |
+| Web research | grok (write cards carry web_search+web_fetch by default; read-only cards get them via `GROK_TOOLS` — spec 23) | probe-verified 2026-08-04: both tools fire headless, no prompt; demand deep-link citations in every web card; one read-only "tricorder" card per research run spot-checks sampled citations live. gemini demoted to optional fallback (on Omarchy its CLI is a mise/npx shim that reinstalls node per scratch cage — alive but wasteful; 19% done-rate historically) |
 
 Live numbers: `swarm-ctl report`. Auth/billing per lane: `docs/lane-economics.md` decision table.
 Recalibrate this table from speedwars rows, never on vibes.
@@ -157,6 +157,10 @@ Recalibrate this table from speedwars rows, never on vibes.
 Everything below runs from the unimatrix repo (`~/code/unimatrix`). Deep semantics live
 in `specs/` (01 core, 03 loop, 04 settings, 10 role classes, 11 succession) and
 `rules/unimatrix/` — this section is the cheat-sheet, not the contract.
+
+**Thrifty profile** (minimum-Anthropic: codex plans+reviews, glm/grok execute, fable orchestrates only): `/u:thrifty` — see `.claude/commands/u-thrifty.md`, `profiles/thrifty.conf`, spec 22.
+
+**Readyroom profile** (deep research + decisions: `readyroom:research`/`:decision`/`:ceo`, glm/grok workhorses, `READYROOM_JUDGE=opus|codex` judge switch, web-capable grok read cards via `GROK_TOOLS`): `/u:readyroom` — see `.claude/commands/u-readyroom.md`, `profiles/readyroom.conf`, spec 23; mode pipelines owned by the rfg- skills in the refactor lead repo.
 
 Hand-seeded specs/? Run `swarm-ctl lint-specs` first — read-only preflight; catches empty
 sidecars, missing write targets, bad lane tokens before any spawn.
@@ -752,3 +756,34 @@ Standing rules:
   probe herd directly. (f) Live-smoke the LINGER before trusting it: `swarm-ctl add` onto the
   lingering pool served in 12s with zero relaunch — the bh065 16.2-min class is dead on runs
   that set POOL_LINGER_SEC.
+- **2026-08-04 thrifty1 (worktree build of the thrifty profile, 7 cards + verify, $3.94 priced / $0.07 claude-lane = 2%):**
+  (a) A NEW-FILE card whose prompt cites repo conventions still needs cage = repo root — t1's
+  `profiles/`-sized cage parked cage-denied on legit orientation reads (`swarm.conf`,
+  `rules/file-headers.md`); the header/format template being inline in the prompt does not stop
+  a worker from trying to read the originals. (b) `done/` entries are BARE ids — a barrier
+  watcher globbing `done/<id>.*` never fires; glob `done/<id>` exactly. (c) Omarchy's
+  mise/npx `codex` shim dies exit-127 inside the `env -i` cage (needs node on a PATH mise
+  never initialized); fix = static musl binary at `~/.local/opt/codex-bin/codex` symlinked
+  from `~/.local/bin/codex` (docs/versions.md). (d) Run the verify wave BEFORE close-out
+  mutations: installing t5's staging deliverable and `rm -rf`-ing its cage before the judge
+  ran produced a false refutation (judge found the cage gone). Order: drain → verify → install/clean.
+  (e) `swarm-ctl` takes BUSDIR by ENV, not positional — `swarm-ctl status .bus-<label>` silently
+  reads the default `.bus` and reports `done=0 live=0` for a healthy run.
+- **2026-08-04 rrbuild+rrfetch (readyroom profile build, 3+2 cards two repos, $1.12 priced /
+  $0 claude-lane = 0%):** (a) On a preseeded drain run the engine verify wave is NOT automatic —
+  it is the explicit `swarm-run.sh --run <label> verify` subcommand; a drain that closes with
+  `vdone 0/N` hasn't been judged yet, not passed. Worth its cost: 4/5 cards drew real refutations
+  (spec self-contradiction, Tempo key-vs-numeric-id, wrong Confluence search lane, dead
+  browse-edgar "full-text" param, invalid gws verb dialect). (b) The PII/host-path gates scan
+  `git ls-files` only — an UNTRACKED new file passes `check.sh` silently and fails after `git add`;
+  gate-check new files post-add, pre-commit. (c) The public-repo employer-token gate means cards
+  authoring unimatrix content must be told the client name is forbidden — glm/codex naturally
+  write it when describing cross-repo ownership ("the refactor lead repo" is the sanctioned form).
+  (d) Bash-authoring lanes ship `((count++))`-under-`set -e` aborts reliably enough to make it a
+  standing reviewer grep (`grep -n '((.*++))' *.sh`) before any credentialed first run.
+
+### 2026-08-04 — pq077 (brain plan 077, 16 cards + 3 review shards, shipped-to-prod)
+- (a) **Mid-run `swarm-ctl add` can crash the driver** — `pid_id[$finished]` unbound at the wait-n pool (feedback filed). Until fixed: after any driver death, workers LIVE ON in their own process groups — watch `run-*.jsonl` mtimes to completion and salvage from disk/streams; never re-queue a claimed id without diffing its write target first (the relaunch's stale-specs sweep re-ran finished cards here).
+- (b) **Codex review shards must self-persist**: a review card's prompt should end "write the findings to `<busdir>/res-<id>.txt` yourself" — rv1-3 completed (15k+ output tokens) but were false-done'd when the driver died; findings had to be harvested from raw streams with jq.
+- (c) **Backtest composite folds on prod BEFORE building surfaces**: pq077's pinned weights passed every unit test and still punished participation in production (volume dims' cohort medians sat far below the rate dims' — 63% of reviewers scored lower than abstainers). A 10-minute W0 fold-simulation card against the live substrate would have caught what no fixture could. Distributional assumptions are spike material, same class as id-join assumptions.
+- (d) **Claude session limits are a swarm-wide hazard, not a lane hazard**: one limit killed both opus seats AND every claude fallback rung simultaneously, turning chain-exhaustion into the common failure mode. When claude is limited, chains ending in claude are chains ending in a wall — prefer codex-terminal chains for review cards, and keep Fable-direct as the fix-wave fallback.
