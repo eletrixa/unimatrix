@@ -7,9 +7,9 @@
     {
       "name": "u",
       "source": "./plugin",
-      "description": "unimatrix \u2014 multi-model swarm orchestration commands + skill from any repo",
+      "description": "unimatrix — multi-model swarm orchestration commands + skill from any repo",
       "category": "Orchestration",
-      "version": "1.6.0"
+      "version": "1.6.1"
     }
   ]
 }

@@ -34,7 +34,13 @@ implements.
    bats suite, including the traversal/write-cage security tests, and prints a loud banner saying so
    instead of "check green". A release checklist run with any gate-skipping override set has not
    actually verified anything; treat it as red.
-5. `git tag -a vX.Y.Z -m "..."` — annotated tag, not lightweight.
+5. `git tag -a vX.Y.Z <graft-commit> -m "..."` — annotated tag, not lightweight, and **on the
+   curated graft commit (see Publishing below), never on the trunk commit**. A trunk-pointing tag
+   can never pass the range check, and pushed to `release` it makes the entire private trunk
+   history publicly reachable — that is exactly the 2026-08-07 tag remediation (v1.0.0/v1.1.0
+   deleted from the public repo, v1.3.0/v1.4.0 re-pointed; `docs/ops/history-rewrites.md`). Since
+   the tag now comes after the graft, the graft snippet takes its tree from the release commit on
+   the trunk, not from the tag.
 
 ## Publishing — two remotes, two histories
 
@@ -52,7 +58,7 @@ implements.
   into the public repo). Instead, graft the release's TREE onto the curated lineage and push that:
 
   ```bash
-  tree=$(git rev-parse vX.Y.Z^{tree})
+  tree=$(git rev-parse <release-commit-on-trunk>^{tree})   # NOT the tag — the tag comes after the graft (step 5)
   new=$(git commit-tree "$tree" -p "$(git rev-parse public-release)" -m "release: vX.Y.Z — <headline>")
   git update-ref refs/heads/public-release "$new"
   git push release public-release:main        # fast-forward on the curated lineage
@@ -106,7 +112,7 @@ implements.
    stale half of the 2026-07-26 flow change):
 
    ```bash
-   tree=$(git rev-parse vX.Y.Z^{tree})
+   tree=$(git rev-parse <release-commit-on-trunk>^{tree})   # NOT the tag — the tag comes after the graft (step 5)
    new=$(git commit-tree "$tree" -p "$(git rev-parse public-release)" -m "release: vX.Y.Z — <headline>")
    git update-ref refs/heads/public-release "$new"
    git push release public-release:main        # fast-forward on the curated lineage

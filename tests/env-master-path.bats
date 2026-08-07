@@ -128,6 +128,18 @@ _glm_lane_set() {
   [[ "$output" == *"export ENV_MASTER_FILE="* ]]
 }
 
+@test "FR-8 abort, no candidate: fix line names the default path to CREATE, not just a bare export" {
+  # First-run friction (operator report 2026-08-06): with no secrets file anywhere, the old fix
+  # line ("export ENV_MASTER_FILE=<your secrets file>") points at nothing — the actual fix is
+  # creating the XDG default. The abort must name that concrete path as the primary fix while
+  # keeping the export alternative (previous test pins the export substring).
+  _glm_lane_set
+  bus_init "$BUS"
+  run env_master_preflight "$BUS"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"create $XDG_CONFIG_HOME/unimatrix/env.master"* ]]
+}
+
 @test "FR-8 explicit-unreadable: ENV_MASTER_FILE=/nonexistent + readable HOME/s -> still aborts (no silent fallback) and export line names the readable candidate" {
   # Explicit $ENV_MASTER_FILE is authoritative even when unreadable: preflight must NOT silently
   # fall through to the readable $HOME/s candidate (it still aborts, status nonzero) — but the abort

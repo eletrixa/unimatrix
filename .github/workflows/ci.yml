@@ -1,5 +1,16 @@
 name: CI
 
+# The public gate. Mirrors a local bare `CHECK_JOBS=1 ./check.sh` run as closely as a GitHub
+# runner allows. Two things bit every run before 2026-08-07 and are handled explicitly here:
+#   1. Tool pins — apt's shellcheck is older than the pinned 0.11.0 (docs/versions.md) and fails
+#      the gate on info-level SC2015 that 0.11.0 does not emit. Both shellcheck and bats install
+#      at their pinned versions, never from apt.
+#   2. swarm.conf — operator-local and gitignored, but the server/API test suites copy it from
+#      the repo root in setup(). A fresh checkout has none, so ~100 tests die before the first
+#      assertion. CI stands in the tracked example.
+# CHECK_JOBS=1: the timing-sensitive tests flake under parallel load (disjoint sets per run, all
+# green in isolation) — serial is the honest configuration on a 2-core runner.
+
 on:
   push:
     branches: [main]
@@ -8,9 +19,22 @@ on:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - name: Install shellcheck and bats
-        run: sudo apt-get update && sudo apt-get install -y shellcheck bats
+      - name: Install shellcheck 0.11.0 (pinned — docs/versions.md)
+        run: |
+          curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz \
+            | sudo tar -xJ --strip-components=1 -C /usr/local/bin shellcheck-v0.11.0/shellcheck
+          shellcheck --version
+      - name: Install bats-core 1.14.0 (pinned — docs/versions.md)
+        run: |
+          git clone -q --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core /tmp/bats-core
+          sudo /tmp/bats-core/install.sh /usr/local
+          bats --version
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Provide swarm.conf (gitignored operator conf; tests copy it from the repo root)
+        run: cp swarm.conf.example swarm.conf
       - name: Run gate
-        run: ./check.sh
+        run: CHECK_JOBS=1 ./check.sh

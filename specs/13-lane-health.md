@@ -46,7 +46,8 @@ fallback spend loud.
 that set intersects the env-key lanes (`gemini`, `glm`, `kimi`) and the env-master file
 (`$ENV_MASTER_FILE`, default `${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix/env.master`) is
 unreadable, the run **aborts before fan-out** (nonzero rc, loud stderr naming the resolved path and
-the fix: `export ENV_MASTER_FILE=<your secrets file>`). Runs whose lane set needs no env key are
+the fix: `export ENV_MASTER_FILE=<candidate>` when a readable candidate exists elsewhere, otherwise
+`create ${XDG_CONFIG_HOME:-$HOME/.config}/unimatrix/env.master`). Runs whose lane set needs no env key are
 unaffected. Per-key absence (file readable, key missing) stays a spawn-time `lane_cmd` failure —
 preflight checks reachability, not contents.
 

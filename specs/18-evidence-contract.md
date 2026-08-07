@@ -139,7 +139,7 @@ zero new dependency. This is the answer to remote/asynchronous viewing without a
 file cannot kill a worker" (PRD P4-FR3's framing) — there is no listening socket to secure or forget
 to close.
 
-> **Acceptance criterion:** `unimatrix report --html [ledger]` writes a self-contained HTML file and
+> **Acceptance criterion:** `unimatrix report --html [ledger-file]` writes a self-contained HTML file and
 > prints its path; passthrough flags (`--run <label>`) reach the underlying fold unchanged.
 
 ## FR-5 — fleetops producer contract v1.0.0 (D1 contract-first)

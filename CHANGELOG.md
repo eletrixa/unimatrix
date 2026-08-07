@@ -3,6 +3,44 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioned with [Semantic Versioning](https://semver.org/).
 
+## [1.6.1] - 2026-08-07
+
+### What's new (for humans)
+- **A clearer message when you haven't set up your API-key file yet**: the swarm preflight now
+  tells you to create `~/.config/unimatrix/env.master` with the missing key(s) instead of only
+  suggesting an environment variable pointing at a file you don't have. (Contributed by Vojtech
+  Rysanek — the project's first external PR.)
+- **The public repo's CI badge finally means something**: the gate workflow had failed on every
+  release since v1.2.0 because it installed the wrong tool versions and lacked a config file.
+  It now runs the same full gate a maintainer runs locally.
+- **The README leads with the modes**: swarm, swarm-loop, thrifty, readyroom, speedwars, call,
+  cockpit, and setup are all visible in one table before any architecture talk.
+
+### Fixed
+- `env_master_preflight` no-candidate abort (spec 21 FR-8): when no readable secrets file exists
+  anywhere, the fix line now names the XDG default path to create (`chmod 600`) as the primary
+  fix, keeping `export ENV_MASTER_FILE=…` as the alternative (first-run operator report
+  2026-08-06; pinned by a new `tests/env-master-path.bats` case).
+- `unimatrix` usage + header comment: the `report` verb's optional positional is now spelled
+  `[ledger-file]` — `[ledger]` read as a subcommand and produced the confusing
+  `speedwars: no ledger at ledger` when typed literally.
+- CI workflow (`.github/workflows/ci.yml`): installs the **pinned** shellcheck 0.11.0 and
+  bats-core 1.14.0 from `docs/versions.md` instead of apt's older builds (apt's shellcheck failed
+  the gate on info-level SC2015 on every `release/main` push since v1.2.0), stands in the tracked
+  `swarm.conf.example` for the gitignored operator `swarm.conf` (whose absence killed ~100 tests
+  in `setup()` on any fresh checkout), installs tmux, and runs `CHECK_JOBS=1` serial.
+- `docs/releasing.md`: release tags are created on the **curated graft commit**, never the trunk
+  commit — a trunk-pointing tag pushed to the public repo makes the private trunk history
+  reachable. Documents the 2026-08-07 tag remediation (v1.0.0/v1.1.0 deleted from the public
+  repo; v1.3.0/v1.4.0 re-pointed to the curated lineage; v1.5.0/v1.6.0 published for the first
+  time, on the curated lineage).
+
+### Changed
+- README rewritten around the modes: a modes table up top (swarm, swarm-loop, thrifty, readyroom,
+  speedwars, call, cockpit, setup), kimi added to the worker-CLI quickstart, tests badge updated
+  to 962.
+- GitHub repo description, homepage, and topics updated to name the modes and lanes.
+
 ## [1.6.0] - 2026-08-06
 
 ### What's new (for humans)

@@ -18,7 +18,7 @@ MCP, zero new runtime dependency — everything is bash plus CLIs already instal
 | Bus | JSONL file-bus on a local POSIX fs (`.bus/`) — no DB, no daemon, no MCP |
 | Monitor | `tmux -L swarm` (isolated socket) + `jq` firehose; optional read-only terminal attach |
 | Config | `swarm.conf` — bash-sourceable `KEY=VALUE`, no YAML/schema engine |
-| Tests | bats-core 1.13.x |
+| Tests | bats-core 1.14.x |
 | Lint | shellcheck -x |
 
 ## Commands
