@@ -9,7 +9,7 @@
       "source": "./plugin",
       "description": "unimatrix — multi-model swarm orchestration commands + skill from any repo",
       "category": "Orchestration",
-      "version": "1.6.1"
+      "version": "1.6.2"
     }
   ]
 }

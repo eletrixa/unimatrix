@@ -1,6 +1,6 @@
 {
   "name": "unimatrix",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "private": true,
   "description": "Multi-model agent orchestration (/swarm, /swarm-loop) — headless CLI workers over a JSONL file-bus, no MCP",
   "scripts": {

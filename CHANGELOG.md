@@ -3,6 +3,20 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioned with [Semantic Versioning](https://semver.org/).
 
+## [1.6.2] - 2026-08-07
+
+### What's new (for humans)
+- **The public test gate is green**: one chronically flaky test raced the tool's own
+  late-add linger feature and lost on small machines; it now opts into the feature it was
+  fighting. No behavior change to the tool itself.
+
+### Fixed
+- Chronic suite flake (`not ok 713`, "PAUSE mid-run blocks new claims"): the test raced the pool's
+  `POOL_LINGER_SEC=0` default — under load the drain gate could fire between p1/p2 finishing and
+  the test injecting p3, so the pool was gone before the late add. The test now opts into a 10s
+  linger window, the spec 21 FR-1 feature built for exactly that late-add shape. Failed 4 of the
+  last 6 full serial runs, including the first public CI run; deterministic-green since.
+
 ## [1.6.1] - 2026-08-07
 
 ### What's new (for humans)

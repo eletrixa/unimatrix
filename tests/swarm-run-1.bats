@@ -263,7 +263,12 @@ load 'helpers/swarm-run-fixture'
   _enqueue p1 "first"
   _enqueue p2 "second"
 
-  "$RUNSH" 3>&- &
+  # POOL_LINGER_SEC=10: with the 0 default the pool exits the INSTANT p1+p2 drain, racing this
+  # test's PAUSE+p3 injection below — under load the first _poll's tick can land after BOTH cards
+  # finished, the pool is already gone, and p3 sits in queue/ forever (the suite's chronic
+  # not-ok-713: res-p1/res-p2 present, done/p3 poll times out). The linger window is the spec 21
+  # FR-1 feature built for exactly this late-add shape; the test must opt in like an operator would.
+  POOL_LINGER_SEC=10 "$RUNSH" 3>&- &
   BG_PIDS+=("$!")
 
   _poll 15 test -f "$BUS/done/p1" || _poll 15 test -e "$BUS/claimed/p1.claude:opus"
